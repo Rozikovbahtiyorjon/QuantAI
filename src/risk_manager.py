@@ -6,11 +6,6 @@ def calculate_position_size(
 ):
     """
     Расчет размера позиции.
-
-    balance       - баланс счета
-    risk_percent  - риск на сделку (%)
-    entry_price   - цена входа
-    stop_loss     - уровень Stop Loss
     """
 
     risk_amount = balance * (risk_percent / 100)
@@ -32,12 +27,9 @@ def calculate_sl_tp(
 ):
     """
     Расчет Stop Loss и Take Profit.
-
-    rr = Risk/Reward
     """
 
     stop_loss = entry_price - atr * 1.5
-
     take_profit = entry_price + atr * 1.5 * rr
 
     return (
