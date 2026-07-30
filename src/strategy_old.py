@@ -1,7 +1,8 @@
 """
+"""
 ====================================================
-QuantAI Professional v4.1
-AI Strategy Engine
+QuantAI Professional v3.1
+Strategy Engine
 ====================================================
 """
 
@@ -12,8 +13,35 @@ from typing import List
 
 import pandas as pd
 
-from src.confidence_engine import ConfidenceEngine
-from src.risk_manager import calculate_sl_tp
+from config.settings import (
+    EMA_FAST,
+    EMA_SLOW,
+    EMA_TREND,
+    RSI_BUY,
+    RSI_SELL,
+    ADX_MIN,
+)
+
+from src.risk_manager import (
+    calculate_sl_tp,
+)
+
+from src.confidence_engine import (
+    ConfidenceEngine,
+)
+
+# ====================================================
+# WEIGHTS
+# ====================================================
+
+TREND_WEIGHT = 3.0
+MOMENTUM_WEIGHT = 2.0
+VOLUME_WEIGHT = 1.5
+VOLATILITY_WEIGHT = 1.0
+BREAKOUT_WEIGHT = 2.5
+
+BUY_THRESHOLD = 5.0
+SELL_THRESHOLD = -5.0
 
 
 # ====================================================
@@ -25,9 +53,9 @@ class SignalResult:
 
     signal: str = "HOLD"
 
-    score: float = 0.0
-
     confidence: float = 0.0
+
+    score: float = 0.0
 
     entry: float = 0.0
 
@@ -45,6 +73,8 @@ class SignalResult:
 @dataclass
 class MarketEngine:
 
+    score: float = 0.0
+
     trend_score: float = 0.0
 
     momentum_score: float = 0.0
@@ -53,29 +83,14 @@ class MarketEngine:
 
     volatility_score: float = 0.0
 
-    liquidity_score: float = 0.0
-
-    structure_score: float = 0.0
-
-    regime_score: float = 0.0
+    breakout_score: float = 0.0
 
     confidence_result = None
 
     reasons: List[str] = field(default_factory=list)
 
-
 # ====================================================
-# HELPERS
-# ====================================================
-
-def last(df: pd.DataFrame):
-    """
-    Возвращает последнюю свечу DataFrame.
-    """
-    return df.iloc[-1]
-
-    # ====================================================
-# TREND ANALYZER
+# TREND
 # ====================================================
 
 def evaluate_trend(
@@ -83,57 +98,54 @@ def evaluate_trend(
     engine: MarketEngine,
 ) -> None:
 
-    row = last(df)
-
-    ema_fast = row["ema_fast"]
-    ema_slow = row["ema_slow"]
-    ema_trend = row["ema_trend"]
-
-    close = row["close"]
-    adx = row["adx"]
+    row = df.iloc[-1]
 
     score = 0.0
 
-    # EMA Alignment
+    # EMA alignment
 
-    if ema_fast > ema_slow:
-        score += 1.5
-    else:
-        score -= 1.5
+    if (
+        row["ema_fast"] >
+        row["ema_slow"] >
+        row["ema_trend"]
+    ):
+        score += 2.0
 
-    if ema_slow > ema_trend:
-        score += 1.0
-    else:
-        score -= 1.0
+    elif (
+        row["ema_fast"] <
+        row["ema_slow"] <
+        row["ema_trend"]
+    ):
+        score -= 2.0
 
-    if close > ema_trend:
-        score += 1.0
-    else:
-        score -= 1.0
+    # Trend direction
 
-    # ADX Bonus
-
-    if adx >= 40:
-        score += 1.5
-
-    elif adx >= 30:
+    if row["trend"] == 1:
         score += 1.0
 
-    elif adx >= 20:
-        score += 0.5
-
-    elif adx < 15:
+    elif row["trend"] == -1:
         score -= 1.0
 
-    engine.trend_score = round(score, 2)
+    # ADX filter
+
+    if row["adx"] >= ADX_MIN:
+
+        if score > 0:
+            score += 0.5
+
+        elif score < 0:
+            score -= 0.5
+
+    engine.trend_score = score * TREND_WEIGHT
+
+    engine.score += engine.trend_score
 
     engine.reasons.append(
         f"Trend Score = {engine.trend_score:.2f}"
     )
 
-
-# ====================================================
-# MOMENTUM ANALYZER
+    # ====================================================
+# MOMENTUM
 # ====================================================
 
 def evaluate_momentum(
@@ -141,58 +153,43 @@ def evaluate_momentum(
     engine: MarketEngine,
 ) -> None:
 
-    row = last(df)
-
-    rsi = row["rsi"]
-
-    macd = row["macd"]
-    macd_signal = row["macd_signal"]
-    macd_hist = row["macd_hist"]
+    row = df.iloc[-1]
 
     score = 0.0
 
     # RSI
 
-    if rsi >= 70:
-        score += 2.0
-
-    elif rsi >= 60:
-        score += 1.5
-
-    elif rsi >= 55:
+    if row["rsi"] >= RSI_BUY:
         score += 1.0
 
-    elif rsi <= 30:
-        score -= 2.0
-
-    elif rsi <= 40:
-        score -= 1.5
-
-    elif rsi <= 45:
+    elif row["rsi"] <= RSI_SELL:
         score -= 1.0
 
     # MACD
 
-    if macd > macd_signal:
+    if row["macd"] > row["macd_signal"]:
         score += 1.0
     else:
         score -= 1.0
 
     # Histogram
 
-    if macd_hist > 0:
+    if row["macd_hist"] > 0:
         score += 0.5
     else:
         score -= 0.5
 
-    engine.momentum_score = round(score, 2)
+    engine.momentum_score = score * MOMENTUM_WEIGHT
+
+    engine.score += engine.momentum_score
 
     engine.reasons.append(
         f"Momentum Score = {engine.momentum_score:.2f}"
     )
 
-    # ====================================================
-# VOLUME ANALYZER
+
+# ====================================================
+# VOLUME
 # ====================================================
 
 def evaluate_volume(
@@ -200,49 +197,32 @@ def evaluate_volume(
     engine: MarketEngine,
 ) -> None:
 
-    row = last(df)
-
-    volume = row["volume"]
-    volume_sma = row["volume_sma20"]
+    row = df.iloc[-1]
 
     score = 0.0
 
-    if volume_sma <= 0:
+    # Volume filter
 
-        engine.volume_score = 0.0
-
-        engine.reasons.append(
-            "Volume Score = 0.00"
-        )
-
-        return
-
-    relative_volume = volume / volume_sma
-
-    if relative_volume >= 2.0:
-        score += 2.0
-
-    elif relative_volume >= 1.5:
-        score += 1.5
-
-    elif relative_volume >= 1.2:
+    if row["volume_filter"]:
         score += 1.0
 
-    elif relative_volume <= 0.6:
-        score -= 1.5
+    # OBV trend
 
-    elif relative_volume <= 0.8:
+    if row["obv"] > row["obv_ema"]:
+        score += 1.0
+    else:
         score -= 1.0
 
-    engine.volume_score = round(score, 2)
+    engine.volume_score = score * VOLUME_WEIGHT
+
+    engine.score += engine.volume_score
 
     engine.reasons.append(
         f"Volume Score = {engine.volume_score:.2f}"
     )
 
-
-# ====================================================
-# VOLATILITY ANALYZER
+    # ====================================================
+# VOLATILITY
 # ====================================================
 
 def evaluate_volatility(
@@ -250,132 +230,133 @@ def evaluate_volatility(
     engine: MarketEngine,
 ) -> None:
 
-    row = last(df)
-
-    atr = row["atr"]
-    close = row["close"]
+    row = df.iloc[-1]
 
     score = 0.0
 
-    atr_percent = atr / close * 100
+    # Volatility filter
 
-    if 0.30 <= atr_percent <= 2.50:
-        score += 1.5
+    if row["volatility_filter"]:
+        score += 1.0
+    else:
+        score -= 0.5
 
-    elif 2.50 < atr_percent <= 4.00:
-        score += 0.8
+    # ATR must exist
 
-    elif atr_percent > 6.00:
-        score -= 1.5
+    if row["atr"] > 0:
+        score += 0.5
 
-    elif atr_percent < 0.15:
-        score -= 1.0
+    engine.volatility_score = (
+        score * VOLATILITY_WEIGHT
+    )
 
-    engine.volatility_score = round(score, 2)
+    engine.score += engine.volatility_score
 
     engine.reasons.append(
         f"Volatility Score = {engine.volatility_score:.2f}"
     )
 
-    # ====================================================
-# STRUCTURE ANALYZER
+
+# ====================================================
+# BREAKOUT
 # ====================================================
 
-def evaluate_structure(
+def evaluate_breakout(
     df: pd.DataFrame,
     engine: MarketEngine,
 ) -> None:
 
-    row = last(df)
+    row = df.iloc[-1]
 
     score = 0.0
 
-    high20 = df["high"].rolling(20).max().iloc[-2]
-    low20 = df["low"].rolling(20).min().iloc[-2]
-
-    close = row["close"]
-
-    if close > high20:
-
+    if row["breakout_up"]:
         score += 2.0
 
-    elif close < low20:
-
+    if row["breakout_down"]:
         score -= 2.0
 
-    else:
-
-        rng = high20 - low20
-
-        if rng > 0:
-
-            pos = (close - low20) / rng
-
-            if pos >= 0.80:
-                score += 0.8
-
-            elif pos <= 0.20:
-                score -= 0.8
-
-    engine.structure_score = round(score, 2)
-
-    engine.reasons.append(
-        f"Structure Score = {engine.structure_score:.2f}"
+    engine.breakout_score = (
+        score * BREAKOUT_WEIGHT
     )
 
+    engine.score += engine.breakout_score
 
-# ====================================================
+    engine.reasons.append(
+        f"Breakout Score = {engine.breakout_score:.2f}"
+    )
+
+ # ====================================================
 # MARKET EVALUATION
 # ====================================================
 
 def evaluate_market(
     df: pd.DataFrame,
 ) -> MarketEngine:
+    """
+    Выполняет полный анализ рынка.
+    """
 
     engine = MarketEngine()
 
-    evaluate_trend(df, engine)
+    confidence = ConfidenceEngine()
 
-    evaluate_momentum(df, engine)
+    evaluate_trend(
+        df,
+        engine,
+    )
 
-    evaluate_volume(df, engine)
+    evaluate_momentum(
+        df,
+        engine,
+    )
 
-    evaluate_volatility(df, engine)
+    evaluate_volume(
+        df,
+        engine,
+    )
 
-    evaluate_structure(df, engine)
+    evaluate_volatility(
+        df,
+        engine,
+    )
 
-    ai = ConfidenceEngine()
+    evaluate_breakout(
+        df,
+        engine,
+    )
 
-    ai.add_component(
+    confidence.add_component(
         "trend",
         engine.trend_score,
     )
 
-    ai.add_component(
+    confidence.add_component(
         "momentum",
         engine.momentum_score,
     )
 
-    ai.add_component(
+    confidence.add_component(
         "volume",
         engine.volume_score,
     )
 
-    ai.add_component(
+    confidence.add_component(
         "volatility",
         engine.volatility_score,
     )
 
-    ai.add_component(
+    confidence.add_component(
         "structure",
-        engine.structure_score,
+        engine.breakout_score,
     )
 
-    engine.confidence_result = ai.evaluate()
+    engine.confidence_result = confidence.evaluate()
 
     return engine
 
-    # ====================================================
+
+# ====================================================
 # SIGNAL GENERATION
 # ====================================================
 
@@ -385,13 +366,14 @@ def generate_signal_result(
 
     engine = evaluate_market(df)
 
-    ai = engine.confidence_result
+    row = df.iloc[-1]
 
-    row = last(df)
+    ai = engine.confidence_result
 
     result = SignalResult()
 
-    result.score = round(ai.total_score, 2)
+    result.score = round(ai.score, 2)
+
     result.confidence = round(ai.confidence, 2)
 
     result.reasons = list(engine.reasons)
@@ -401,52 +383,45 @@ def generate_signal_result(
         2,
     )
 
-    atr = float(row["atr"])
-
-    MIN_CONFIDENCE = 60.0
-
-    if ai.confidence < MIN_CONFIDENCE:
-
-        result.signal = "HOLD"
-
-        result.stop_loss = result.entry
-        result.take_profit = result.entry
-
-        result.reasons.append(
-            f"Confidence too low ({ai.confidence:.1f}%)"
-        )
-
-        return result
-
+    # ==========================================
     # BUY
+    # ==========================================
 
     if ai.decision == "BUY":
 
         result.signal = "BUY"
 
         sl, tp = calculate_sl_tp(
+
             entry_price=result.entry,
-            atr=atr,
+
+            atr=float(row["atr"]),
+
         )
 
         result.stop_loss = sl
+
         result.take_profit = tp
 
         return result
 
+    # ==========================================
     # SELL
+    # ==========================================
 
     if ai.decision == "SELL":
 
         result.signal = "SELL"
 
         sl, tp = calculate_sl_tp(
+
             entry_price=result.entry,
-            atr=atr,
+
+            atr=float(row["atr"]),
+
         )
 
         risk = result.entry - sl
-        reward = tp - result.entry
 
         result.stop_loss = round(
             result.entry + risk,
@@ -454,17 +429,20 @@ def generate_signal_result(
         )
 
         result.take_profit = round(
-            result.entry - reward,
+            result.entry - (tp - result.entry),
             2,
         )
 
         return result
 
+    # ==========================================
     # HOLD
+    # ==========================================
 
     result.signal = "HOLD"
 
     result.stop_loss = result.entry
+
     result.take_profit = result.entry
 
     return result
@@ -503,6 +481,10 @@ def print_signal(
 
     print("=" * 60)
 
+
+# ====================================================
+# MODULE EXPORT
+# ====================================================
 
 __all__ = [
     "SignalResult",
