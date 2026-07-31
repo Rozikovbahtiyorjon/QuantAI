@@ -88,7 +88,7 @@ class FeatureEngine:
 
         self.features = FeatureVector()
 
-            # ====================================================
+    # ====================================================
     # EMA FEATURES
     # ====================================================
 
@@ -193,7 +193,7 @@ class FeatureEngine:
             (close - vwap) / vwap,
         )
 
-            # ====================================================
+    # ====================================================
     # RSI FEATURES
     # ====================================================
 
@@ -224,7 +224,7 @@ class FeatureEngine:
             1.0 if rsi < 30 else 0.0,
         )
 
-            # ====================================================
+    # ====================================================
     # MACD FEATURES
     # ====================================================
 
@@ -254,7 +254,7 @@ class FeatureEngine:
             1.0 if hist > 0 else 0.0,
         )
 
-            # ====================================================
+    # ====================================================
     # ADX FEATURES
     # ====================================================
 
@@ -289,7 +289,7 @@ class FeatureEngine:
             1.0 if adx > 25 else 0.0,
         )
 
-            # ====================================================
+    # ====================================================
     # BOLLINGER FEATURES
     # ====================================================
 
@@ -342,6 +342,48 @@ class FeatureEngine:
         )
 
     # ====================================================
+    # EMA SLOPE FEATURES
+    # ====================================================
+
+    def calculate_ema_slope_features(
+        self,
+        df: pd.DataFrame,
+    ) -> None:
+
+        if len(df) < 2:
+            return
+
+        prev = df.iloc[-2]
+        curr = df.iloc[-1]
+
+        fast_slope = (
+            float(curr["ema_fast"]) - float(prev["ema_fast"])
+        ) / float(prev["ema_fast"])
+
+        slow_slope = (
+            float(curr["ema_slow"]) - float(prev["ema_slow"])
+        ) / float(prev["ema_slow"])
+
+        trend_slope = (
+            float(curr["ema_trend"]) - float(prev["ema_trend"])
+        ) / float(prev["ema_trend"])
+
+        self.features.add(
+            "ema_fast_slope",
+            fast_slope,
+        )
+
+        self.features.add(
+            "ema_slow_slope",
+            slow_slope,
+        )
+
+        self.features.add(
+            "ema_trend_slope",
+            trend_slope,
+        )    
+
+    # ====================================================
     # BUILD FEATURE VECTOR
     # ====================================================
 
@@ -385,7 +427,57 @@ class FeatureEngine:
         # Bollinger
         self.calculate_bollinger_features(row)
 
+        # EMA Slope
+        self.calculate_ema_slope_features(df)
+
+                # OBV
+        self.calculate_obv_features(df)
+
         return self.features
+
+    # ====================================================
+    # OBV FEATURES
+    # ====================================================
+
+        # ====================================================
+    # OBV FEATURES
+    # ====================================================
+
+    def calculate_obv_features(
+        self,
+        df: pd.DataFrame,
+    ) -> None:
+
+        if len(df) < 2:
+            return
+
+        prev = df.iloc[-2]
+        curr = df.iloc[-1]
+
+        obv_now = float(curr["obv"])
+        obv_prev = float(prev["obv"])
+
+        delta = obv_now - obv_prev
+
+        if abs(obv_now) > 1e-9:
+            normalized = delta / abs(obv_now)
+        else:
+            normalized = 0.0
+
+        self.features.add(
+            "obv_normalized",
+            normalized,
+        )
+
+        self.features.add(
+            "obv_delta",
+            delta,
+        )
+
+        self.features.add(
+            "obv_positive",
+            1.0 if delta > 0 else 0.0,
+        )
 
 # ====================================================
 # PUBLIC API

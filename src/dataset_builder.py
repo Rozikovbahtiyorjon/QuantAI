@@ -107,8 +107,6 @@ class DatasetBuilder:
 
             row["index"] = i
 
-            row["close"] = float(df.iloc[i]["close"])
-
             self.dataset.append(row)
 
                 # ====================================================

@@ -41,6 +41,8 @@ from sklearn.metrics import (
 
 from xgboost import XGBClassifier
 
+from src.model_manager import ModelManager
+
 # ====================================================
 # CONFIG
 # ====================================================
@@ -58,7 +60,7 @@ class MLConfig:
 
     learning_rate: float = 0.05
 
-    # ====================================================
+# ====================================================
 # TRAIN RESULT
 # ====================================================
 
@@ -73,7 +75,7 @@ class TrainingResult:
 
     f1: float
 
-    # ====================================================
+# ====================================================
 # ML ENGINE
 # ====================================================
 
@@ -83,37 +85,27 @@ class MLEngine:
     Обучение моделей Machine Learning.
     """
 
-    def __init__(
+    def __init__(...):
 
-        self,
+    self.config = config or MLConfig()
 
-        config: MLConfig | None = None,
+    self.model_manager = ModelManager()
 
-    ):
+    loaded = self.model_manager.load()
 
-        self.config = config or MLConfig()
+    if loaded is not None:
+
+        self.model = loaded
+
+    else:
 
         self.model = XGBClassifier(
-
-            n_estimators=self.config.n_estimators,
-
-            max_depth=self.config.max_depth,
-
-            learning_rate=self.config.learning_rate,
-
-            random_state=self.config.random_state,
-
-            objective="multi:softmax",
-
-            num_class=3,
-
-            eval_metric="mlogloss",
-
+            ...
         )
 
-        self.feature_names: list[str] = []
+    self.feature_names = []
 
-            # ====================================================
+    # ====================================================
     # PREPARE DATA
     # ====================================================
 
@@ -179,7 +171,7 @@ class MLEngine:
 
         )
 
-            # ====================================================
+    # ====================================================
     # TRAIN MODEL
     # ====================================================
 
@@ -260,7 +252,7 @@ class MLEngine:
 
         )
 
-        return TrainingResult(
+        result = TrainingResult(
 
             accuracy=accuracy,
 
@@ -272,7 +264,38 @@ class MLEngine:
 
         )
 
-            # ====================================================
+        self.model_manager.save(self.model)
+
+        return result
+
+    # ====================================================
+    # FEATURE IMPORTANCE
+    # ====================================================
+
+    def feature_importance(
+        self,
+        top: int = 20,
+    ) -> pd.DataFrame:
+
+        importance = pd.DataFrame({
+
+            "feature": self.feature_names,
+
+            "importance": self.model.feature_importances_,
+
+        })
+
+        importance = importance.sort_values(
+
+            by="importance",
+
+            ascending=False,
+
+        )
+
+        return importance.head(top)
+
+    # ====================================================
     # PRINT REPORT
     # ====================================================
 
@@ -294,7 +317,18 @@ class MLEngine:
 
         print("=" * 60)
 
-        # ====================================================
+        print()
+
+        print("TOP FEATURES")
+        print("-" * 60)
+
+        importance = self.feature_importance()
+
+        print(importance.to_string(index=False))
+
+        print("=" * 60)
+
+# ====================================================
 # PUBLIC API
 # ====================================================
 
