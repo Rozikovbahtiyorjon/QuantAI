@@ -194,6 +194,154 @@ class FeatureEngine:
         )
 
             # ====================================================
+    # RSI FEATURES
+    # ====================================================
+
+    def calculate_rsi_features(
+        self,
+        row: pd.Series,
+    ) -> None:
+
+        rsi = float(row["rsi"])
+
+        self.features.add(
+            "rsi_normalized",
+            rsi / 100.0,
+        )
+
+        self.features.add(
+            "rsi_distance_50",
+            (rsi - 50.0) / 50.0,
+        )
+
+        self.features.add(
+            "rsi_overbought",
+            1.0 if rsi > 70 else 0.0,
+        )
+
+        self.features.add(
+            "rsi_oversold",
+            1.0 if rsi < 30 else 0.0,
+        )
+
+            # ====================================================
+    # MACD FEATURES
+    # ====================================================
+
+    def calculate_macd_features(
+        self,
+        row: pd.Series,
+    ) -> None:
+
+        macd = float(row["macd"])
+
+        signal = float(row["macd_signal"])
+
+        hist = float(row["macd_hist"])
+
+        self.features.add(
+            "macd_spread",
+            macd - signal,
+        )
+
+        self.features.add(
+            "macd_histogram",
+            hist,
+        )
+
+        self.features.add(
+            "macd_positive",
+            1.0 if hist > 0 else 0.0,
+        )
+
+            # ====================================================
+    # ADX FEATURES
+    # ====================================================
+
+    def calculate_adx_features(
+        self,
+        row: pd.Series,
+    ) -> None:
+
+        adx = float(row["adx"])
+
+        plus_di = float(row["plus_di"])
+
+        minus_di = float(row["minus_di"])
+
+        self.features.add(
+            "adx_normalized",
+            adx / 100.0,
+        )
+
+        self.features.add(
+            "trend_direction",
+            plus_di - minus_di,
+        )
+
+        self.features.add(
+            "trend_positive",
+            1.0 if plus_di > minus_di else 0.0,
+        )
+
+        self.features.add(
+            "strong_trend",
+            1.0 if adx > 25 else 0.0,
+        )
+
+            # ====================================================
+    # BOLLINGER FEATURES
+    # ====================================================
+
+    def calculate_bollinger_features(
+        self,
+        row: pd.Series,
+    ) -> None:
+
+        close = float(row["close"])
+
+        upper = float(row["bb_upper"])
+
+        middle = float(row["bb_middle"])
+
+        lower = float(row["bb_lower"])
+
+        width = upper - lower
+
+        if width > 0:
+
+            position = (close - lower) / width
+
+        else:
+
+            position = 0.5
+
+        self.features.add(
+            "bb_position",
+            position,
+        )
+
+        self.features.add(
+            "bb_width",
+            width / middle,
+        )
+
+        self.features.add(
+            "bb_above_middle",
+            1.0 if close > middle else 0.0,
+        )
+
+        self.features.add(
+            "bb_touch_upper",
+            1.0 if close >= upper else 0.0,
+        )
+
+        self.features.add(
+            "bb_touch_lower",
+            1.0 if close <= lower else 0.0,
+        )
+
+    # ====================================================
     # BUILD FEATURE VECTOR
     # ====================================================
 
@@ -225,9 +373,21 @@ class FeatureEngine:
         # VWAP
         self.calculate_vwap_features(row)
 
+        # RSI
+        self.calculate_rsi_features(row)
+
+        # MACD
+        self.calculate_macd_features(row)
+
+        # ADX
+        self.calculate_adx_features(row)
+
+        # Bollinger
+        self.calculate_bollinger_features(row)
+
         return self.features
 
-        # ====================================================
+# ====================================================
 # PUBLIC API
 # ====================================================
 
