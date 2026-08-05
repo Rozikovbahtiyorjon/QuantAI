@@ -111,6 +111,8 @@ class Position:
 
     net_profit: float = 0.0
 
+    balance_after_close: float = 0.0
+
     max_profit: float = 0.0
 
     max_drawdown: float = 0.0
@@ -574,6 +576,8 @@ class TradeEngine:
 
         )
 
+        position.balance_after_close = self.balance
+        
         self.equity = self.balance
 
         # ============================================
@@ -724,7 +728,10 @@ class TradeEngine:
 
                 "net_profit": round(trade.net_profit, 2),
 
-                "balance": round(self.balance, 2),
+                "balance": round(
+                    trade.balance_after_close,
+                    2,
+                ),
 
                 "close_reason": trade.reason_close.value,
 

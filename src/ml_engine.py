@@ -82,28 +82,45 @@ class TrainingResult:
 class MLEngine:
 
     """
-    Обучение моделей Machine Learning.
+    Обучение модели Machine Learning.
     """
 
-    def __init__(...):
+    def __init__(
+        self,
+        config: MLConfig | None = None,
+    ) -> None:
 
-    self.config = config or MLConfig()
+        self.config = config or MLConfig()
 
-    self.model_manager = ModelManager()
+        self.model_manager = ModelManager()
 
-    loaded = self.model_manager.load()
+        loaded = self.model_manager.load()
 
-    if loaded is not None:
+        if loaded is not None:
 
-        self.model = loaded
+            self.model = loaded
 
-    else:
+        else:
 
-        self.model = XGBClassifier(
-            ...
-        )
+            self.model = XGBClassifier(
 
-    self.feature_names = []
+                n_estimators=self.config.n_estimators,
+
+                max_depth=self.config.max_depth,
+
+                learning_rate=self.config.learning_rate,
+
+                random_state=self.config.random_state,
+
+                objective="multi:softmax",
+
+                num_class=3,
+
+                eval_metric="mlogloss",
+
+            )
+
+        self.feature_names: list[str] = []
 
     # ====================================================
     # PREPARE DATA
@@ -171,7 +188,7 @@ class MLEngine:
 
         )
 
-    # ====================================================
+        # ====================================================
     # TRAIN MODEL
     # ====================================================
 
@@ -198,73 +215,102 @@ class MLEngine:
 
         print()
 
+        # ====================================================
+        # TRAIN MODEL
+        # ====================================================
+
         self.model.fit(
-
             X_train,
-
             y_train,
-
         )
 
-        prediction = self.model.predict(X_test)
+        # ====================================================
+        # PREDICTION
+        # ====================================================
+
+        prediction = self.model.predict(
+            X_test,
+        )
+
+        # ====================================================
+        # RESTORE QUANTAI TRADING CLASSES
+        # ====================================================
+        #
+        # XGBoost internal classes:
+        # 0 = SELL
+        # 1 = HOLD
+        # 2 = BUY
+        #
+        # QuantAI trading classes:
+        # -1 = SELL
+        #  0 = HOLD
+        #  1 = BUY
+        # ====================================================
+
+        prediction = pd.Series(
+            prediction,
+        ).replace({
+            0: -1,
+            1: 0,
+            2: 1,
+        }).to_numpy()
+
+        y_test_original = pd.Series(
+            y_test,
+        ).replace({
+            0: -1,
+            1: 0,
+            2: 1,
+        }).to_numpy()
+
+        # ====================================================
+        # METRICS
+        # ====================================================
 
         accuracy = accuracy_score(
-
-            y_test,
-
+            y_test_original,
             prediction,
-
         )
 
         precision = precision_score(
-
-            y_test,
-
+            y_test_original,
             prediction,
-
             average="macro",
-
             zero_division=0,
-
         )
 
         recall = recall_score(
-
-            y_test,
-
+            y_test_original,
             prediction,
-
             average="macro",
-
             zero_division=0,
-
         )
 
         f1 = f1_score(
-
-            y_test,
-
+            y_test_original,
             prediction,
-
             average="macro",
-
             zero_division=0,
-
         )
+
+        # ====================================================
+        # TRAINING RESULT
+        # ====================================================
 
         result = TrainingResult(
-
             accuracy=accuracy,
-
             precision=precision,
-
             recall=recall,
-
             f1=f1,
-
         )
 
-        self.model_manager.save(self.model)
+        # ====================================================
+        # SAVE MODEL
+        # ====================================================
+
+        self.model_manager.save(
+            self.model,
+        )
 
         return result
 

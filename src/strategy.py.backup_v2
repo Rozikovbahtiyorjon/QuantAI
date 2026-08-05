@@ -84,7 +84,7 @@ def last(df: pd.DataFrame):
     """
     return df.iloc[-1]
 
-# ====================================================
+    # ====================================================
 # TREND ANALYZER
 # ====================================================
 
@@ -201,7 +201,7 @@ def evaluate_momentum(
         f"Momentum Score = {engine.momentum_score:.2f}"
     )
 
-# ====================================================
+    # ====================================================
 # VOLUME ANALYZER
 # ====================================================
 
@@ -287,7 +287,7 @@ def evaluate_volatility(
         f"Volatility Score = {engine.volatility_score:.2f}"
     )
 
-# ====================================================
+    # ====================================================
 # STRUCTURE ANALYZER
 # ====================================================
 
@@ -544,243 +544,205 @@ def generate_signal_result(
             ml_signal = "HOLD"
             ml_probability = 0.0
 
+        # ====================================================
+    # ML CONFIRMATION
     # ====================================================
-    # ML CONFIRMATION v2
-    # ====================================================
-    
+
     # ----------------------------------------------------
-    # AI + ML directional fusion
-    #
-    # Rules:
-    #
-    # 1. AI HOLD -> cannot create a trade
-    # 2. ML HOLD -> blocks AI BUY/SELL
-    # 3. AI and ML agreement -> confirmation
-    # 4. AI BUY + ML SELL -> HOLD
-    # 5. AI SELL + ML BUY -> HOLD
+    # SAVE AI CONFIDENCE BEFORE ML
     # ----------------------------------------------------
-    
+
     ai_confidence_before_ml = float(
         ai.confidence
     )
-    
-    # ----------------------------------------------------
-    # AI HOLD
-    # ----------------------------------------------------
-    
-    if ai.decision == "HOLD":
-    
-        ai.confidence = ai_confidence_before_ml
-    
-        result.reasons.append(
-            f"AI HOLD: ML={ml_signal} "
-            f"({ml_probability:.2f}%)" 
-        )
-    
-        fusion_signal = "HOLD"
-    
+
     # ----------------------------------------------------
     # ML HOLD
+    #
+    # HOLD is neutral.
+    #
+    # A high ML HOLD probability must NOT increase
+    # directional trading confidence.
     # ----------------------------------------------------
-    
-    elif ml_signal == "HOLD":
-    
-        ai.confidence = ai_confidence_before_ml
-    
+
+    if ml_signal == "HOLD":
+
+        combined_confidence = (
+            ai_confidence_before_ml
+        )
+
         result.reasons.append(
-            f"ML HOLD blocks AI {ai.decision} "
+            f"ML HOLD neutral "
             f"({ml_probability:.2f}%)"
         )
-    
-        fusion_signal = "HOLD"
-    
+
     # ----------------------------------------------------
-    # AI + ML AGREEMENT
+    # ML AGREES WITH AI
+    #
+    # Directional agreement increases confidence.
     # ----------------------------------------------------
-    
+
     elif ml_signal == ai.decision:
-    
+
         combined_confidence = (
             ai_confidence_before_ml * 0.60
             +
             ml_probability * 0.40
         )
-    
-        ai.confidence = combined_confidence
-    
+
         result.reasons.append(
             f"ML confirms {ml_signal} "
             f"({ml_probability:.2f}%)"
         )
-    
-        fusion_signal = ai.decision
-    
+
     # ----------------------------------------------------
-    # AI + ML DISAGREEMENT
+    # ML DISAGREES WITH AI
+    #
+    # BUY/SELL disagreement reduces confidence.
+    #
+    # ML probability is NOT added as positive
+    # confidence in this case.
     # ----------------------------------------------------
-    
+
     else:
-    
-        penalized_confidence = (
+
+        combined_confidence = (
             ai_confidence_before_ml * 0.70
         )
-    
-        ai.confidence = penalized_confidence
-    
+
         result.reasons.append(
-            f"ML disagreement: " 
+            f"ML disagreement: "
             f"AI={ai.decision}, "
             f"ML={ml_signal}, "
             f"ML Probability="
             f"{ml_probability:.2f}%"
         )
-    
-        fusion_signal = "HOLD"
 
-    
+    # ----------------------------------------------------
+    # STORE FINAL CONFIDENCE
+    # ----------------------------------------------------
+
+    ai.confidence = float(
+        combined_confidence
+    )
+
     # ====================================================
     # CONFIDENCE DIAGNOSTICS
     # ====================================================
-    
-    combined_confidence = float(
-        ai.confidence
-    )
-    
+
     print()
     print("CONFIDENCE DIAGNOSTICS")
     print("-" * 60)
-    
+
     print(
         f"AI CONFIDENCE       : "
         f"{ai_confidence_before_ml:.2f}%"
     )
-    
+
     print(
         f"ML SIGNAL           : "
         f"{ml_signal}"
     )
-    
+
     print(
         f"ML PROBABILITY      : "
         f"{ml_probability:.2f}%"
     )
-    
+
     print(
         f"COMBINED CONFIDENCE : "
         f"{combined_confidence:.2f}%"
     )
-    
-    print(
-        f"FUSION SIGNAL       : "
-        f"{fusion_signal}"
-    )
-    
+
     print("-" * 60)
-    
-    
+
     # ====================================================
     # SAVE FINAL CONFIDENCE
     # ====================================================
-    
+
     result.confidence = round(
         combined_confidence,
         2,
     )
-    
-    
+
     # ====================================================
-    # FINAL FUSION FILTER
+    # MINIMUM CONFIDENCE FILTER
     # ====================================================
-    
-    if (
-        ai.confidence < MIN_CONFIDENCE
-        or fusion_signal == "HOLD"
-    ):
-    
+
+    if ai.confidence < MIN_CONFIDENCE:
+
         result.signal = "HOLD"
-    
+
         result.stop_loss = result.entry
-    
+
         result.take_profit = result.entry
-    
-        if fusion_signal == "HOLD":
-    
-            result.reasons.append(
-                "ML/AI fusion did not approve trade"
-            )
-    
-        else:  
-    
-            result.reasons.append(
-                f"Confidence too low "
-                f"({ai.confidence:.1f}%)"
-            )
+
+        result.reasons.append(
+            f"Confidence too low "
+            f"({ai.confidence:.1f}%)"
+        )
 
         return result
-    
-    
+
     # ====================================================
     # BUY
     # ====================================================
-    
-    if fusion_signal == "BUY":
-    
+
+    if ai.decision == "BUY":
+
         result.signal = "BUY"
-    
+
         sl, tp = calculate_sl_tp(
             entry_price=result.entry,
             atr=atr,
         )
-    
+
         result.stop_loss = sl
-    
+
         result.take_profit = tp
-    
+
         return result
-    
-    
+
     # ====================================================
     # SELL
     # ====================================================
-    
-    if fusion_signal == "SELL":
-    
+
+    if ai.decision == "SELL":
+
         result.signal = "SELL"
-    
+
         sl, tp = calculate_sl_tp(
-            entry_price=result.entry, 
+            entry_price=result.entry,
             atr=atr,
         )
-    
+
         risk = result.entry - sl
-    
+
         reward = tp - result.entry
-    
+
         result.stop_loss = round(
             result.entry + risk,
             2,
         )
-    
+
         result.take_profit = round(
             result.entry - reward,
             2,
         )
-    
+
         return result
-    
-    
+
     # ====================================================
     # HOLD
     # ====================================================
-    
+
     result.signal = "HOLD"
-    
+
     result.stop_loss = result.entry
-    
+
     result.take_profit = result.entry
-    
+
     return result
-    
 
 # ====================================================
 # PRINT SIGNAL
