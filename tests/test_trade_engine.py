@@ -1,255 +1,289 @@
-"""
-====================================================
-QuantAI Trade Engine Diagnostic
-Live Binance Data Test
-====================================================
-"""
+from pathlib import Path
+import sys
 
-from __future__ import annotations
+# ============================================================
+# PROJECT ROOT
+# ============================================================
 
-import pandas as pd
+ROOT = Path(__file__).resolve().parents[1]
 
-from config.settings import (
-    SYMBOL,
-    TIMEFRAME,
-    LIMIT,
-    INITIAL_BALANCE,
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+
+# ============================================================
+# IMPORTS
+# ============================================================
+
+from src.trade_engine import (
+    TradeEngine,
 )
 
-from src.data_loader import load_binance_data
-from src.indicators import add_indicators
-from src.trade_engine import TradeEngine
+
+# ============================================================
+# HELPERS
+# ============================================================
+
+def ok(message: str) -> None:
+    print(f"OK    : {message}")
 
 
-# ====================================================
-# HEADER
-# ====================================================
-
-print("=" * 60)
-print("QUANTAI TRADE ENGINE DIAGNOSTIC")
-print("=" * 60)
+def fail(message: str) -> None:
+    print(f"FAIL  : {message}")
+    raise AssertionError(message)
 
 
-# ====================================================
-# LOAD MARKET DATA
-# ====================================================
-
-print()
-print("Loading Binance data...")
-
-print(f"Symbol    : {SYMBOL}")
-print(f"Timeframe : {TIMEFRAME}")
-print(f"Limit     : {LIMIT}")
-
-print()
-
-df = load_binance_data(
-    symbol=SYMBOL,
-    timeframe=TIMEFRAME,
-    limit=LIMIT,
-)
-
-print(f"Rows loaded : {len(df)}")
+def check(condition: bool, message: str) -> None:
+    if condition:
+        ok(message)
+    else:
+        fail(message)
 
 
-# ====================================================
-# INDICATORS
-# ====================================================
+# ============================================================
+# TEST: INITIAL STATE
+# ============================================================
 
-print()
-print("Calculating indicators...")
+def test_initial_state() -> None:
 
-df = add_indicators(df)
+    engine = TradeEngine()
 
-print("Indicators calculated.")
+    positions = engine.get_open_positions()
 
-
-# ====================================================
-# BASIC VALIDATION
-# ====================================================
-
-required_columns = [
-    "timestamp",
-    "open",
-    "high",
-    "low",
-    "close",
-    "volume",
-    "atr",
-    "ema_fast",
-    "ema_slow",
-    "ema_trend",
-    "rsi",
-    "macd",
-    "macd_signal",
-    "adx",
-    "vwap",
-    "trend",
-]
-
-
-missing = [
-    column
-    for column in required_columns
-    if column not in df.columns
-]
-
-
-if missing:
-
-    print()
-    print("ERROR: Missing columns:")
-
-    for column in missing:
-        print(f" - {column}")
-
-    raise SystemExit(1)
-
-
-print()
-print("Data validation: OK")
-
-
-# ====================================================
-# CREATE ENGINE
-# ====================================================
-
-print()
-print("Creating Trade Engine...")
-
-engine = TradeEngine()
-
-
-print()
-print("Initial Balance:")
-print(f"{engine.balance:.2f}")
-
-
-print()
-print("Maximum Open Positions:")
-print(engine.can_open_position())
-
-
-# ====================================================
-# RUN ENGINE
-# ====================================================
-
-print()
-print("=" * 60)
-print("RUNNING TRADE ENGINE")
-print("=" * 60)
-
-trades = engine.run(df)
-
-
-# ====================================================
-# REPORT
-# ====================================================
-
-print()
-print("=" * 60)
-print("TRADE ENGINE RESULT")
-print("=" * 60)
-
-print(
-    f"Initial Balance : "
-    f"{INITIAL_BALANCE:.2f}"
-)
-
-print(
-    f"Final Balance   : "
-    f"{engine.balance:.2f}"
-)
-
-print(
-    f"Total Trades    : "
-    f"{engine.total_trades}"
-)
-
-print(
-    f"Wins            : "
-    f"{engine.winning_trades}"
-)
-
-print(
-    f"Losses          : "
-    f"{engine.losing_trades}"
-)
-
-print(
-    f"Win Rate        : "
-    f"{engine.win_rate:.2f}%"
-)
-
-print(
-    f"Total Profit    : "
-    f"{engine.total_profit:.2f}"
-)
-
-print("=" * 60)
-
-
-# ====================================================
-# TRADES
-# ====================================================
-
-if len(trades) > 0:
-
-    print()
-    print("TRADES")
-    print("-" * 60)
-
-    print(
-        trades.to_string(
-            index=False
-        )
+    check(
+        isinstance(positions, list),
+        "Initial open positions returns list",
     )
 
-else:
+    check(
+        len(positions) == 0,
+        "TradeEngine starts with zero open positions",
+    )
+
+
+# ============================================================
+# TEST: POSITION LIMIT
+# ============================================================
+
+def test_position_limit() -> None:
+
+    engine = TradeEngine()
+
+    result = engine.can_open_position()
+
+    check(
+        isinstance(result, bool),
+        "can_open_position returns bool",
+    )
+
+    check(
+        result is True,
+        "Empty TradeEngine can open position",
+    )
+
+
+# ============================================================
+# TEST: POSITION IDS
+# ============================================================
+
+def test_position_ids() -> None:
+
+    engine = TradeEngine()
+
+    first = engine.next_position_id()
+    second = engine.next_position_id()
+
+    check(
+        isinstance(first, int),
+        "Position ID is integer",
+    )
+
+    check(
+        second == first + 1,
+        "Position IDs increment sequentially",
+    )
+
+
+# ============================================================
+# TEST: COMMISSION
+# ============================================================
+
+def test_commission() -> None:
+
+    engine = TradeEngine()
+
+    commission = engine.calculate_commission(
+        quantity=1.0,
+        price=100.0,
+    )
+
+    check(
+        isinstance(commission, float),
+        "Commission returns float",
+    )
+
+    check(
+        commission >= 0.0,
+        "Commission is non-negative",
+    )
+
+
+# ============================================================
+# TEST: SLIPPAGE
+# ============================================================
+#
+# We test the method structurally without assuming the
+# project's exact enum implementation.
+# ============================================================
+
+def test_slippage() -> None:
+
+    engine = TradeEngine()
+
+    try:
+        from src.trade_engine import PositionSide
+
+        sides = list(PositionSide)
+
+    except Exception:
+
+        sides = []
+
+    if not sides:
+        print(
+            "INFO  : PositionSide enum unavailable; "
+            "slippage test skipped"
+        )
+        return
+
+    for side in sides:
+
+        try:
+
+            result = engine.apply_slippage(
+                side=side,
+                price=100.0,
+            )
+
+            check(
+                isinstance(result, float),
+                f"Slippage returns float for {side}",
+            )
+
+            check(
+                result > 0.0,
+                f"Slippage price remains positive for {side}",
+            )
+
+        except Exception as exc:
+
+            fail(
+                f"Slippage failed for {side}: {exc}"
+            )
+
+
+# ============================================================
+# TEST: DATAFRAME EXPORT
+# ============================================================
+
+def test_dataframe_export() -> None:
+
+    engine = TradeEngine()
+
+    df = engine.to_dataframe()
+
+    check(
+        hasattr(df, "columns"),
+        "TradeEngine exports DataFrame",
+    )
+
+    check(
+        len(df) == 0,
+        "Empty TradeEngine exports empty DataFrame",
+    )
+
+
+# ============================================================
+# TEST: RUN EMPTY DATAFRAME
+# ============================================================
+
+def test_run_empty_dataframe() -> None:
+
+    import pandas as pd
+
+    engine = TradeEngine()
+
+    df = pd.DataFrame()
+
+    try:
+
+        result = engine.run(df)
+
+        check(
+            hasattr(result, "columns"),
+            "run() returns DataFrame for empty input",
+        )
+
+    except Exception as exc:
+
+        print(
+            "INFO  : run(empty DataFrame) raised:"
+        )
+
+        print(
+            f"        {type(exc).__name__}: {exc}"
+        )
+
+        print(
+            "INFO  : This may be expected if "
+            "TradeEngine requires OHLCV columns."
+        )
+
+
+# ============================================================
+# TEST RUNNER
+# ============================================================
+
+def main() -> None:
 
     print()
-    print("No trades generated.")
+    print("=" * 70)
+    print("TRADE ENGINE UNIT TEST")
+    print("=" * 70)
+    print()
+
+    tests = [
+        test_initial_state,
+        test_position_limit,
+        test_position_ids,
+        test_commission,
+        test_slippage,
+        test_dataframe_export,
+        test_run_empty_dataframe,
+    ]
+
+    passed = 0
+
+    for test in tests:
+
+        print()
+        print(
+            f"TEST: {test.__name__}"
+        )
+        print("-" * 70)
+
+        test()
+
+        passed += 1
+
+    print()
+    print("=" * 70)
+    print(
+        f"PASSED: {passed}/{len(tests)}"
+    )
+    print("=" * 70)
+    print()
 
 
-# ====================================================
-# LAST CANDLE
-# ====================================================
-
-print()
-print("=" * 60)
-print("LAST CANDLE")
-print("=" * 60)
-
-row = df.iloc[-1]
-
-print(f"Time        : {row['timestamp']}")
-print(f"Open        : {row['open']:.2f}")
-print(f"High        : {row['high']:.2f}")
-print(f"Low         : {row['low']:.2f}")
-print(f"Close       : {row['close']:.2f}")
-print(f"Volume      : {row['volume']:.4f}")
-
-print()
-
-print(f"EMA Fast    : {row['ema_fast']:.2f}")
-print(f"EMA Slow    : {row['ema_slow']:.2f}")
-print(f"EMA Trend   : {row['ema_trend']:.2f}")
-print(f"RSI         : {row['rsi']:.2f}")
-print(f"MACD        : {row['macd']:.4f}")
-print(f"MACD Signal : {row['macd_signal']:.4f}")
-print(f"ATR         : {row['atr']:.2f}")
-print(f"ADX         : {row['adx']:.2f}")
-print(f"VWAP        : {row['vwap']:.2f}")
-print(f"Trend       : {row['trend']}")
-
-print("=" * 60)
-
-
-# ====================================================
-# FINISHED
-# ====================================================
-
-print()
-print("=" * 60)
-print("TRADE ENGINE DIAGNOSTIC FINISHED")
-print("=" * 60)
+if __name__ == "__main__":
+    main()

@@ -1,36 +1,54 @@
 """
-QuantAI - Walk Forward Engine
-=============================
+QuantAI Walk-Forward Engine v2.
 
-Sequential out-of-sample backtesting engine.
+Sequential out-of-sample validation engine.
 
 IMPORTANT COMPATIBILITY CONTRACT
---------------------------------
 
 generate_windows() returns exactly:
 
-    (
-        window_number,
-        train_df,
-        test_df,
-    )
+(
+    window_number,
+    train_df,
+    test_df,
+)
 
-The engine does NOT:
+The engine itself does NOT:
 
-    - connect to Binance
-    - execute real orders
-    - calculate indicators
-    - modify Strategy
-    - train ML models directly
+- connect to Binance;
+- execute real orders;
+- calculate indicators;
+- modify Strategy;
+- directly train ML models unless an optional
+  train_callback is explicitly provided.
 
-It orchestrates sequential out-of-sample
-backtesting using BacktestEngine.
+Default behavior remains compatible with the
+previous WalkForwardEngine implementation.
+
+Architecture:
+
+Historical Data
+       |
+       v
+WalkForwardEngine
+       |
+       +--> TRAIN WINDOW
+       |       |
+       |       +--> optional train_callback
+       |
+       +--> TEST WINDOW
+               |
+               v
+        BacktestEngine
+               |
+               v
+        BacktestResult
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 import pandas as pd
 
@@ -48,6 +66,22 @@ DEFAULT_TRAIN_SIZE = 500
 DEFAULT_TEST_SIZE = 100
 MINIMUM_WINDOW_SIZE = 1
 DEFAULT_INITIAL_BALANCE = 1000.0
+
+
+# =========================================================
+# TYPES
+# =========================================================
+
+WindowTuple = Tuple[
+    int,
+    pd.DataFrame,
+    pd.DataFrame,
+]
+
+TrainCallback = Callable[
+    [pd.DataFrame, pd.DataFrame, int],
+    Any,
+]
 
 
 # =========================================================
@@ -72,6 +106,9 @@ class WalkForwardWindowResult:
     test_size: int
 
     backtest_result: BacktestResult
+
+    # Optional metadata for future ML integration.
+    model_result: Any = None
 
     @property
     def window_number(self) -> int:
@@ -101,7 +138,9 @@ class WalkForwardResult:
 
     win_rate: float
 
-    windows: List[WalkForwardWindowResult] = field(
+    windows: List[
+        WalkForwardWindowResult
+    ] = field(
         default_factory=list
     )
 
@@ -110,7 +149,7 @@ class WalkForwardResult:
         self,
     ) -> List[WalkForwardWindowResult]:
         """
-        Backward-compatible alias for windows.
+        Backward-compatible alias.
         """
         return self.windows
 
@@ -123,23 +162,12 @@ class WalkForwardResult:
 
 
 # =========================================================
-# WINDOW TYPE
-# =========================================================
-
-WindowTuple = Tuple[
-    int,
-    pd.DataFrame,
-    pd.DataFrame,
-]
-
-
-# =========================================================
 # ENGINE
 # =========================================================
 
 class WalkForwardEngine:
     """
-    Sequential out-of-sample backtesting engine.
+    Sequential out-of-sample validation engine.
 
     Example:
 
@@ -158,6 +186,12 @@ class WalkForwardEngine:
         Window 3:
             TRAIN 10:20
             TEST 20:25
+
+    The train data is available for optional model
+    training through train_callback.
+
+    Without train_callback, behavior remains compatible
+    with the previous implementation.
     """
 
     def __init__(
@@ -166,6 +200,9 @@ class WalkForwardEngine:
         test_size: int = DEFAULT_TEST_SIZE,
         step_size: Optional[int] = None,
         initial_balance: float = DEFAULT_INITIAL_BALANCE,
+        train_callback: Optional[
+            TrainCallback
+        ] = None,
     ) -> None:
 
         # -------------------------------------------------
@@ -222,6 +259,17 @@ class WalkForwardEngine:
             )
 
         # -------------------------------------------------
+        # VALIDATE CALLBACK
+        # -------------------------------------------------
+
+        if train_callback is not None and not callable(
+            train_callback
+        ):
+            raise TypeError(
+                "train_callback must be callable."
+            )
+
+        # -------------------------------------------------
         # STORE CONFIGURATION
         # -------------------------------------------------
 
@@ -237,6 +285,8 @@ class WalkForwardEngine:
         self.initial_balance = float(
             initial_balance
         )
+
+        self.train_callback = train_callback
 
         # -------------------------------------------------
         # LAST RESULT
@@ -296,145 +346,176 @@ class WalkForwardEngine:
     # WINDOW GENERATOR
     # =====================================================
 
-    
     def generate_windows(
         self,
         df: pd.DataFrame,
     ) -> List[WindowTuple]:
-            """
+        """
         Generate sequential train/test windows.
-    
-            Each item is exactly:
-    
+
+        COMPATIBILITY CONTRACT:
+
+        Every returned item is exactly:
+
+            (
+                window_number,
+                train_df,
+                test_df,
+            )
+
+        Original DataFrame indexes are preserved.
+
+        Returned DataFrames are copies.
+
+        Incomplete final test windows are excluded.
+
+        step_size defines the starting position
+        of the next training window.
+        """
+
+        self.validate_data(df)
+
+        windows: List[WindowTuple] = []
+
+        total_rows = len(df)
+
+        window_number = 1
+        start = 0
+
+        while True:
+
+            train_start = start
+
+            train_end = (
+                train_start
+                + self.train_size
+            )
+
+            test_start = train_end
+
+            test_end = (
+                test_start
+                + self.test_size
+            )
+
+            # ---------------------------------------------
+            # STOP IF TRAIN WINDOW IS INCOMPLETE
+            # ---------------------------------------------
+
+            if train_end > total_rows:
+                break
+
+            # ---------------------------------------------
+            # STOP IF TEST WINDOW IS INCOMPLETE
+            # ---------------------------------------------
+
+            if test_end > total_rows:
+                break
+
+            # ---------------------------------------------
+            # CREATE COPIES
+            # ---------------------------------------------
+
+            train_df = (
+                df.iloc[
+                    train_start:train_end
+                ]
+                .copy()
+            )
+
+            test_df = (
+                df.iloc[
+                    test_start:test_end
+                ]
+                .copy()
+            )
+
+            # ---------------------------------------------
+            # SAFETY CHECKS
+            # ---------------------------------------------
+
+            if len(train_df) != self.train_size:
+                break
+
+            if len(test_df) != self.test_size:
+                break
+
+            # ---------------------------------------------
+            # APPEND
+            # ---------------------------------------------
+
+            windows.append(
                 (
                     window_number,
                     train_df,
                     test_df,
                 )
-    
-            Original DataFrame indexes are preserved.
-    
-            Returned DataFrames are copies.
-    
-            Incomplete final test windows are excluded.
-    
-            The step_size defines the starting position
-            of the next training window.
-    
-            Example
-            -------
-    
-            train_size = 5
-            test_size = 5
-            step_size = 10
-    
-            Window 1:
-                TRAIN: 0:5
-                TEST : 5:10
-    
-            Window 2:
-                TRAIN: 10:15
-                TEST : 15:20
-    
-            Window 3:
-                TRAIN: 20:25
-                TEST : 25:30
-    
-            Therefore, when step_size > test_size,
-            unused rows between windows are preserved.
-            """
-    
-            self.validate_data(df)
-    
-            windows: List[WindowTuple] = []
-    
-            window_number = 1
-            total_rows = len(df)
-    
-            start = 0
-    
-            while True:
-    
-                # ---------------------------------------------
-                # TRAIN WINDOW
-                # ---------------------------------------------
-    
-                train_start = start
-    
-                train_end = (
-                    train_start
-                    + self.train_size
-                )
-    
-                # ---------------------------------------------
-                # TEST WINDOW
-                # ---------------------------------------------
-    
-                test_start = train_end
-    
-                test_end = (
-                    test_start
-                    + self.test_size
-                )
-    
-                # ---------------------------------------------
-                # STOP ON INCOMPLETE TEST WINDOW
-                # ---------------------------------------------
-    
-                if test_end > total_rows:
-                    break
-    
-                # ---------------------------------------------
-                # CREATE COPIES
-                # ---------------------------------------------
-    
-                train_df = (
-                    df.iloc[
-                        train_start:train_end
-                    ]
-                    .copy()
-                )
-    
-                test_df = (
-                    df.iloc[
-                        test_start:test_end
-                    ]
-                    .copy()
-                )
-    
-                # ---------------------------------------------
-                # SAFETY CHECKS
-                # ---------------------------------------------
-    
-                if len(train_df) != self.train_size:
-                    break
-    
-                if len(test_df) != self.test_size:
-                    break
-    
-                # ---------------------------------------------
-                # APPEND WINDOW
-                # ---------------------------------------------
-    
-                windows.append(
-                    (
-                        window_number,
-                        train_df,
-                        test_df,
-                    )
-                )
-    
-                # ---------------------------------------------
-                # ADVANCE TO NEXT WINDOW
-                # ---------------------------------------------
-    
-                start += self.step_size
-    
-                window_number += 1
-    
-            return windows
+            )
 
+            # ---------------------------------------------
+            # ADVANCE
+            # ---------------------------------------------
 
+            start += self.step_size
+
+            window_number += 1
+
+        return windows
+
+    # =====================================================
+    # WINDOW BOUNDARIES
+    # =====================================================
+
+    def _get_window_boundaries(
+        self,
+        window_number: int,
+    ) -> Tuple[int, int, int, int]:
+        """
+        Return:
+
+            train_start,
+            train_end,
+            test_start,
+            test_end
+
+        for a given 1-based window number.
+        """
+
+        if type(window_number) is not int:
+            raise TypeError(
+                "window_number must be an integer."
+            )
+
+        if window_number <= 0:
+            raise ValueError(
+                "window_number must be greater than zero."
+            )
+
+        start = (
+            (window_number - 1)
+            * self.step_size
+        )
+
+        train_start = start
+
+        train_end = (
+            train_start
+            + self.train_size
+        )
+
+        test_start = train_end
+
+        test_end = (
+            test_start
+            + self.test_size
+        )
+
+        return (
+            train_start,
+            train_end,
+            test_start,
+            test_end,
+        )
 
     # =====================================================
     # SINGLE WINDOW
@@ -453,11 +534,55 @@ class WalkForwardEngine:
         """
         Run one Walk-Forward test window.
 
-        BacktestEngine receives only the test DataFrame.
+        train_df is available for optional ML training.
+
+        BacktestEngine receives only test_df.
+
+        This preserves the important separation:
+
+            TRAIN
+              |
+              v
+        optional model update
+              |
+              v
+            TEST
+              |
+              v
+        BacktestEngine
         """
 
         # -------------------------------------------------
-        # VALIDATE WINDOW
+        # VALIDATE DATA
+        # -------------------------------------------------
+
+        self.validate_data(df)
+
+        # -------------------------------------------------
+        # VALIDATE WINDOW ID
+        # -------------------------------------------------
+
+        if type(window_id) is not int:
+            raise TypeError(
+                "window_id must be an integer."
+            )
+
+        if window_id <= 0:
+            raise ValueError(
+                "window_id must be greater than zero."
+            )
+
+        # -------------------------------------------------
+        # VALIDATE BALANCE
+        # -------------------------------------------------
+
+        if initial_balance <= 0:
+            raise ValueError(
+                "initial_balance must be greater than zero."
+            )
+
+        # -------------------------------------------------
+        # VALIDATE BOUNDARIES
         # -------------------------------------------------
 
         if train_start < 0:
@@ -539,12 +664,29 @@ class WalkForwardEngine:
             )
 
         # -------------------------------------------------
+        # OPTIONAL MODEL TRAINING
+        # -------------------------------------------------
+
+        model_result = None
+
+        if self.train_callback is not None:
+
+            model_result = self.train_callback(
+                train_df,
+                test_df,
+                window_id,
+            )
+
+        # -------------------------------------------------
         # BACKTEST
         # -------------------------------------------------
 
         backtest = BacktestEngine(
-            initial_balance=initial_balance
+            initial_balance=initial_balance,
         )
+
+        backtest.minimum_rows = test_size
+
 
         backtest_result = backtest.run(
             test_df
@@ -563,6 +705,7 @@ class WalkForwardEngine:
             train_size=train_size,
             test_size=test_size,
             backtest_result=backtest_result,
+            model_result=model_result,
         )
 
     # =====================================================
@@ -578,6 +721,9 @@ class WalkForwardEngine:
 
         The final balance from one test window becomes
         the initial balance of the next test window.
+
+        The default behavior remains compatible with
+        the previous implementation.
         """
 
         self.validate_data(df)
@@ -610,28 +756,30 @@ class WalkForwardEngine:
             test_df,
         ) in generated_windows:
 
+            (
+                train_start,
+                train_end,
+                test_start,
+                test_end,
+            ) = self._get_window_boundaries(
+                window_number
+            )
+
             # ---------------------------------------------
-            # ORIGINAL POSITIONS
+            # SAFETY: MATCH GENERATED WINDOWS
             # ---------------------------------------------
 
-            start = (
-                (window_number - 1)
-                * self.step_size
-            )
+            if len(train_df) != self.train_size:
+                raise ValueError(
+                    "Generated train window size "
+                    "does not match engine configuration."
+                )
 
-            train_start = start
-
-            train_end = (
-                train_start
-                + self.train_size
-            )
-
-            test_start = train_end
-
-            test_end = (
-                test_start
-                + self.test_size
-            )
+            if len(test_df) != self.test_size:
+                raise ValueError(
+                    "Generated test window size "
+                    "does not match engine configuration."
+                )
 
             # ---------------------------------------------
             # RUN WINDOW
@@ -751,6 +899,19 @@ class WalkForwardEngine:
         return self._result
 
     # =====================================================
+    # RESET
+    # =====================================================
+
+    def reset(self) -> None:
+        """
+        Clear the latest Walk-Forward result.
+
+        Configuration remains unchanged.
+        """
+
+        self._result = None
+
+    # =====================================================
     # REPORT
     # =====================================================
 
@@ -826,6 +987,12 @@ class WalkForwardEngine:
                 window.backtest_result
             )
 
+            model_status = (
+                "trained"
+                if window.model_result is not None
+                else "not_trained"
+            )
+
             print(
                 f"Window "
                 f"{window.window_number}: "
@@ -835,12 +1002,18 @@ class WalkForwardEngine:
                 f"TEST="
                 f"{window.test_start}:"
                 f"{window.test_end} | "
+                f"train_size="
+                f"{window.train_size} | "
+                f"test_size="
+                f"{window.test_size} | "
                 f"trades="
                 f"{backtest.total_trades} | "
                 f"profit="
                 f"{backtest.net_profit:.2f} | "
                 f"win_rate="
-                f"{backtest.win_rate:.2f}%"
+                f"{backtest.win_rate:.2f}% | "
+                f"model="
+                f"{model_status}"
             )
 
         print("=" * 70)
@@ -856,9 +1029,18 @@ def run_walk_forward(
     test_size: int = DEFAULT_TEST_SIZE,
     step_size: Optional[int] = None,
     initial_balance: float = DEFAULT_INITIAL_BALANCE,
+    train_callback: Optional[
+        TrainCallback
+    ] = None,
 ) -> WalkForwardResult:
     """
     Convenience wrapper.
+
+    By default behaves exactly like the previous
+    run_walk_forward() interface.
+
+    train_callback is optional and reserved for
+    future ML Walk-Forward integration.
     """
 
     engine = WalkForwardEngine(
@@ -866,6 +1048,7 @@ def run_walk_forward(
         test_size=test_size,
         step_size=step_size,
         initial_balance=initial_balance,
+        train_callback=train_callback,
     )
 
     result = engine.run(df)
@@ -884,6 +1067,8 @@ __all__ = [
     "DEFAULT_TEST_SIZE",
     "DEFAULT_INITIAL_BALANCE",
     "MINIMUM_WINDOW_SIZE",
+    "WindowTuple",
+    "TrainCallback",
     "WalkForwardWindowResult",
     "WalkForwardResult",
     "WalkForwardEngine",

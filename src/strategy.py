@@ -1,14 +1,49 @@
 """
-====================================================
-QuantAI Professional v4.1
-AI Strategy Engine
-====================================================
+QuantAI Professional v5
+Strategy Engine
+
+Pipeline:
+
+Market Data
+    ↓
+Technical Analysis
+    ↓
+Confidence Engine
+    ↓
+AI Decision
+    ↓
+ML Model
+    ↓
+AI + ML Fusion v2
+    ↓
+Final Signal
+    ↓
+Risk Manager
+    ↓
+BUY / SELL / HOLD
+
+AI + ML Fusion v2 rules:
+
+1. AI HOLD -> ML cannot create a trade
+2. ML HOLD -> blocks AI BUY/SELL
+3. AI + ML agreement -> confirmation
+4. AI BUY + ML SELL -> HOLD
+5. AI SELL + ML BUY -> HOLD
+6. Agreement confidence:
+       AI * 0.60 + ML * 0.40
+7. Conflict confidence:
+       AI * 0.70
+8. Minimum trade confidence:
+       60%
+
+This module does NOT execute trades.
+It only generates strategy signals.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List
+from typing import Any, List
 
 import pandas as pd
 
@@ -18,12 +53,35 @@ from src.model_manager import ModelManager
 from src.risk_manager import calculate_sl_tp
 
 
-# ====================================================
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+MIN_CONFIDENCE = 60.0
+
+AI_WEIGHT = 0.60
+ML_WEIGHT = 0.40
+
+CONFLICT_PENALTY = 0.70
+
+
+# ============================================================
 # SIGNAL RESULT
-# ====================================================
+# ============================================================
 
 @dataclass
 class SignalResult:
+    """
+    Complete result of one Strategy Engine decision.
+
+    Besides the final trading signal, this object contains
+    AI/ML/Fusion diagnostics so that SignalDiagnostics can
+    analyze decisions without coupling itself to Strategy.
+    """
+
+    # --------------------------------------------------------
+    # FINAL SIGNAL
+    # --------------------------------------------------------
 
     signal: str = "HOLD"
 
@@ -37,12 +95,56 @@ class SignalResult:
 
     take_profit: float = 0.0
 
-    reasons: List[str] = field(default_factory=list)
+    reasons: List[str] = field(
+        default_factory=list
+    )
+
+    # --------------------------------------------------------
+    # AI DIAGNOSTICS
+    # --------------------------------------------------------
+
+    ai_signal: str = "HOLD"
+
+    ai_confidence: float = 0.0
+
+    # --------------------------------------------------------
+    # ML DIAGNOSTICS
+    # --------------------------------------------------------
+
+    ml_signal: str = "HOLD"
+
+    ml_probability: float = 0.0
+
+    ml_buy_probability: float = 0.0
+
+    ml_sell_probability: float = 0.0
+
+    ml_hold_probability: float = 0.0
+
+    # --------------------------------------------------------
+    # FUSION DIAGNOSTICS
+    # --------------------------------------------------------
+
+    fusion_signal: str = "HOLD"
+
+    combined_confidence: float = 0.0
+
+    trade_approved: bool = False
+
+    fusion_reason: str = ""
+
+    # --------------------------------------------------------
+    # OPTIONAL CONTEXT
+    # --------------------------------------------------------
+
+    window_id: int | None = None
+
+    timestamp: Any = None
 
 
-# ====================================================
+# ============================================================
 # MARKET ENGINE
-# ====================================================
+# ============================================================
 
 @dataclass
 class MarketEngine:
@@ -61,32 +163,108 @@ class MarketEngine:
 
     regime_score: float = 0.0
 
-    confidence_result = None
+    confidence_result: object | None = None
 
-    reasons: List[str] = field(default_factory=list)
+    reasons: List[str] = field(
+        default_factory=list
+    )
 
 
-# ====================================================
-# AI MODEL
-# ====================================================
+# ============================================================
+# ML MODEL
+# ============================================================
 
 model_manager = ModelManager()
+
 AI_MODEL = model_manager.load()
 
 
-# ====================================================
+# ============================================================
 # HELPERS
-# ====================================================
+# ============================================================
 
-def last(df: pd.DataFrame):
+def last(
+    df: pd.DataFrame,
+) -> pd.Series:
     """
-    Возвращает последнюю свечу DataFrame.
+    Return the last candle from a DataFrame.
     """
+
+    if df.empty:
+        raise ValueError(
+            "Strategy received empty DataFrame."
+        )
+
     return df.iloc[-1]
 
-# ====================================================
+
+def _normalize_signal(
+    signal: Any,
+) -> str:
+    """
+    Normalize signal names.
+    """
+
+    if signal is None:
+        return "HOLD"
+
+    value = str(
+        signal
+    ).strip().upper()
+
+    aliases = {
+        "LONG": "BUY",
+        "SHORT": "SELL",
+        "NEUTRAL": "HOLD",
+        "WAIT": "HOLD",
+        "NONE": "HOLD",
+    }
+
+    return aliases.get(
+        value,
+        value,
+    )
+
+
+def _clamp_probability(
+    value: Any,
+) -> float:
+    """
+    Convert probability/confidence to [0, 100].
+
+    Examples:
+
+        0.95 -> 95.0
+        95.0 -> 95.0
+    """
+
+    if value is None:
+        return 0.0
+
+    try:
+        number = float(value)
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return 0.0
+
+    if 0.0 <= number <= 1.0:
+        number *= 100.0
+
+    return max(
+        0.0,
+        min(
+            100.0,
+            number,
+        ),
+    )
+
+
+# ============================================================
 # TREND ANALYZER
-# ====================================================
+# ============================================================
 
 def evaluate_trend(
     df: pd.DataFrame,
@@ -95,16 +273,31 @@ def evaluate_trend(
 
     row = last(df)
 
-    ema_fast = row["ema_fast"]
-    ema_slow = row["ema_slow"]
-    ema_trend = row["ema_trend"]
+    ema_fast = float(
+        row["ema_fast"]
+    )
 
-    close = row["close"]
-    adx = row["adx"]
+    ema_slow = float(
+        row["ema_slow"]
+    )
+
+    ema_trend = float(
+        row["ema_trend"]
+    )
+
+    close = float(
+        row["close"]
+    )
+
+    adx = float(
+        row["adx"]
+    )
 
     score = 0.0
 
-    # EMA Alignment
+    # --------------------------------------------------------
+    # EMA ALIGNMENT
+    # --------------------------------------------------------
 
     if ema_fast > ema_slow:
         score += 1.5
@@ -121,7 +314,9 @@ def evaluate_trend(
     else:
         score -= 1.0
 
-    # ADX Bonus
+    # --------------------------------------------------------
+    # ADX
+    # --------------------------------------------------------
 
     if adx >= 40:
         score += 1.5
@@ -135,16 +330,20 @@ def evaluate_trend(
     elif adx < 15:
         score -= 1.0
 
-    engine.trend_score = round(score, 2)
+    engine.trend_score = round(
+        score,
+        2,
+    )
 
     engine.reasons.append(
-        f"Trend Score = {engine.trend_score:.2f}"
+        f"Trend Score = "
+        f"{engine.trend_score:.2f}"
     )
 
 
-# ====================================================
+# ============================================================
 # MOMENTUM ANALYZER
-# ====================================================
+# ============================================================
 
 def evaluate_momentum(
     df: pd.DataFrame,
@@ -153,15 +352,27 @@ def evaluate_momentum(
 
     row = last(df)
 
-    rsi = row["rsi"]
+    rsi = float(
+        row["rsi"]
+    )
 
-    macd = row["macd"]
-    macd_signal = row["macd_signal"]
-    macd_hist = row["macd_hist"]
+    macd = float(
+        row["macd"]
+    )
+
+    macd_signal = float(
+        row["macd_signal"]
+    )
+
+    macd_hist = float(
+        row["macd_hist"]
+    )
 
     score = 0.0
 
+    # --------------------------------------------------------
     # RSI
+    # --------------------------------------------------------
 
     if rsi >= 70:
         score += 2.0
@@ -181,29 +392,38 @@ def evaluate_momentum(
     elif rsi <= 45:
         score -= 1.0
 
+    # --------------------------------------------------------
     # MACD
+    # --------------------------------------------------------
 
     if macd > macd_signal:
         score += 1.0
     else:
         score -= 1.0
 
-    # Histogram
+    # --------------------------------------------------------
+    # MACD HISTOGRAM
+    # --------------------------------------------------------
 
     if macd_hist > 0:
         score += 0.5
     else:
         score -= 0.5
 
-    engine.momentum_score = round(score, 2)
-
-    engine.reasons.append(
-        f"Momentum Score = {engine.momentum_score:.2f}"
+    engine.momentum_score = round(
+        score,
+        2,
     )
 
-# ====================================================
+    engine.reasons.append(
+        f"Momentum Score = "
+        f"{engine.momentum_score:.2f}"
+    )
+
+
+# ============================================================
 # VOLUME ANALYZER
-# ====================================================
+# ============================================================
 
 def evaluate_volume(
     df: pd.DataFrame,
@@ -212,8 +432,13 @@ def evaluate_volume(
 
     row = last(df)
 
-    volume = row["volume"]
-    volume_sma = row["volume_sma20"]
+    volume = float(
+        row["volume"]
+    )
+
+    volume_sma = float(
+        row["volume_sma20"]
+    )
 
     score = 0.0
 
@@ -227,7 +452,9 @@ def evaluate_volume(
 
         return
 
-    relative_volume = volume / volume_sma
+    relative_volume = (
+        volume / volume_sma
+    )
 
     if relative_volume >= 2.0:
         score += 2.0
@@ -244,16 +471,20 @@ def evaluate_volume(
     elif relative_volume <= 0.8:
         score -= 1.0
 
-    engine.volume_score = round(score, 2)
+    engine.volume_score = round(
+        score,
+        2,
+    )
 
     engine.reasons.append(
-        f"Volume Score = {engine.volume_score:.2f}"
+        f"Volume Score = "
+        f"{engine.volume_score:.2f}"
     )
 
 
-# ====================================================
+# ============================================================
 # VOLATILITY ANALYZER
-# ====================================================
+# ============================================================
 
 def evaluate_volatility(
     df: pd.DataFrame,
@@ -262,12 +493,29 @@ def evaluate_volatility(
 
     row = last(df)
 
-    atr = row["atr"]
-    close = row["close"]
+    atr = float(
+        row["atr"]
+    )
+
+    close = float(
+        row["close"]
+    )
 
     score = 0.0
 
-    atr_percent = atr / close * 100
+    if close <= 0:
+
+        engine.volatility_score = 0.0
+
+        engine.reasons.append(
+            "Volatility Score = 0.00"
+        )
+
+        return
+
+    atr_percent = (
+        atr / close * 100.0
+    )
 
     if 0.30 <= atr_percent <= 2.50:
         score += 1.5
@@ -281,62 +529,96 @@ def evaluate_volatility(
     elif atr_percent < 0.15:
         score -= 1.0
 
-    engine.volatility_score = round(score, 2)
-
-    engine.reasons.append(
-        f"Volatility Score = {engine.volatility_score:.2f}"
+    engine.volatility_score = round(
+        score,
+        2,
     )
 
-# ====================================================
+    engine.reasons.append(
+        f"Volatility Score = "
+        f"{engine.volatility_score:.2f}"
+    )
+
+
+# ============================================================
 # STRUCTURE ANALYZER
-# ====================================================
+# ============================================================
 
 def evaluate_structure(
     df: pd.DataFrame,
     engine: MarketEngine,
 ) -> None:
 
+    if len(df) < 21:
+
+        engine.structure_score = 0.0
+
+        engine.reasons.append(
+            "Structure Score = 0.00"
+        )
+
+        return
+
     row = last(df)
 
     score = 0.0
 
-    high20 = df["high"].rolling(20).max().iloc[-2]
-    low20 = df["low"].rolling(20).min().iloc[-2]
+    high20 = (
+        df["high"]
+        .rolling(20)
+        .max()
+        .iloc[-2]
+    )
 
-    close = row["close"]
+    low20 = (
+        df["low"]
+        .rolling(20)
+        .min()
+        .iloc[-2]
+    )
+
+    close = float(
+        row["close"]
+    )
 
     if close > high20:
-
         score += 2.0
 
     elif close < low20:
-
         score -= 2.0
 
     else:
 
-        rng = high20 - low20
+        price_range = (
+            high20 - low20
+        )
 
-        if rng > 0:
+        if price_range > 0:
 
-            pos = (close - low20) / rng
+            position = (
+                close - low20
+            ) / price_range
 
-            if pos >= 0.80:
+            if position >= 0.80:
                 score += 0.8
 
-            elif pos <= 0.20:
+            elif position <= 0.20:
                 score -= 0.8
 
-    engine.structure_score = round(score, 2)
+    engine.structure_score = round(
+        score,
+        2,
+    )
 
     engine.reasons.append(
-        f"Structure Score = {engine.structure_score:.2f}"
+        f"Structure Score = "
+        f"{engine.structure_score:.2f}"
     )
 
 
-# ====================================================
+# ============================================================
 # MARKET EVALUATION
-# ====================================================
+# ============================================================
 
 def evaluate_market(
     df: pd.DataFrame,
@@ -344,60 +626,347 @@ def evaluate_market(
 
     engine = MarketEngine()
 
-    evaluate_trend(df, engine)
+    evaluate_trend(
+        df,
+        engine,
+    )
 
-    evaluate_momentum(df, engine)
+    evaluate_momentum(
+        df,
+        engine,
+    )
 
-    evaluate_volume(df, engine)
+    evaluate_volume(
+        df,
+        engine,
+    )
 
-    evaluate_volatility(df, engine)
+    evaluate_volatility(
+        df,
+        engine,
+    )
 
-    evaluate_structure(df, engine)
+    evaluate_structure(
+        df,
+        engine,
+    )
 
-    ai = ConfidenceEngine()
+    # --------------------------------------------------------
+    # CONFIDENCE ENGINE
+    # --------------------------------------------------------
 
-    ai.add_component(
+    confidence_engine = ConfidenceEngine()
+
+    confidence_engine.add_component(
         "trend",
         engine.trend_score,
     )
 
-    ai.add_component(
+    confidence_engine.add_component(
         "momentum",
         engine.momentum_score,
     )
 
-    ai.add_component(
+    confidence_engine.add_component(
         "volume",
         engine.volume_score,
     )
 
-    ai.add_component(
+    confidence_engine.add_component(
         "volatility",
         engine.volatility_score,
     )
 
-    ai.add_component(
+    confidence_engine.add_component(
         "structure",
         engine.structure_score,
     )
 
-    engine.confidence_result = ai.evaluate()
+    engine.confidence_result = (
+        confidence_engine.evaluate()
+    )
 
     return engine
 
-# ====================================================
+
+# ============================================================
+# ML PREDICTION
+# ============================================================
+
+def predict_ml(
+    df: pd.DataFrame,
+) -> tuple[str, float, dict[int, float]]:
+    """
+    Get ML signal and complete class probabilities.
+
+    XGBoost classes:
+
+        0 = SELL
+        1 = HOLD
+        2 = BUY
+
+    Returns:
+
+        ml_signal
+        ml_probability
+        probabilities
+    """
+
+    if AI_MODEL is None:
+
+        return (
+            "HOLD",
+            0.0,
+            {},
+        )
+
+    try:
+
+        features = build_features(
+            df
+        )
+
+        X = pd.DataFrame(
+            [features]
+        )
+
+        probabilities = (
+            AI_MODEL
+            .predict_proba(X)[0]
+        )
+
+        classes = (
+            AI_MODEL.classes_
+        )
+
+        best_index = int(
+            probabilities.argmax()
+        )
+
+        prediction = classes[
+            best_index
+        ]
+
+        ml_probability = (
+            float(
+                probabilities[
+                    best_index
+                ]
+            )
+            * 100.0
+        )
+
+        if prediction == 0:
+            ml_signal = "SELL"
+
+        elif prediction == 1:
+            ml_signal = "HOLD"
+
+        elif prediction == 2:
+            ml_signal = "BUY"
+
+        else:
+            ml_signal = "HOLD"
+
+        ml_probabilities = {
+            int(cls): float(prob) * 100.0
+            for cls, prob in zip(
+                classes,
+                probabilities,
+            )
+        }
+
+        return (
+            ml_signal,
+            ml_probability,
+            ml_probabilities,
+        )
+
+    except Exception as exc:
+
+        print()
+
+        print(
+            f"ML prediction error: {exc}"
+        )
+
+        return (
+            "HOLD",
+            0.0,
+            {},
+        )
+
+
+# ============================================================
+# AI + ML FUSION v2
+# ============================================================
+
+def fuse_ai_ml(
+    ai_signal: str,
+    ai_confidence: float,
+    ml_signal: str,
+    ml_probability: float,
+) -> tuple[str, float, bool, str]:
+    """
+    AI + ML Fusion v2.
+
+    Returns:
+
+        signal
+        combined_confidence
+        approved
+        reason
+    """
+
+    ai_signal = _normalize_signal(
+        ai_signal
+    )
+
+    ml_signal = _normalize_signal(
+        ml_signal
+    )
+
+    ai_confidence = _clamp_probability(
+        ai_confidence
+    )
+
+    ml_probability = _clamp_probability(
+        ml_probability
+    )
+
+    # --------------------------------------------------------
+    # HOLD + HOLD
+    # --------------------------------------------------------
+
+    if (
+        ai_signal == "HOLD"
+        and ml_signal == "HOLD"
+    ):
+
+        return (
+            "HOLD",
+            round(
+                ai_confidence,
+                2,
+            ),
+            False,
+            "AI HOLD + ML HOLD",
+        )
+
+    # --------------------------------------------------------
+    # AI HOLD
+    #
+    # ML cannot create a trade.
+    # --------------------------------------------------------
+
+    if ai_signal == "HOLD":
+
+        return (
+            "HOLD",
+            round(
+                ai_confidence,
+                2,
+            ),
+            False,
+            f"AI HOLD blocks ML {ml_signal}",
+        )
+
+    # --------------------------------------------------------
+    # AI + ML AGREEMENT
+    # --------------------------------------------------------
+
+    if ml_signal == ai_signal:
+
+        combined = (
+            ai_confidence * AI_WEIGHT
+            +
+            ml_probability * ML_WEIGHT
+        )
+
+        combined = round(
+            combined,
+            2,
+        )
+
+        approved = (
+            combined >= MIN_CONFIDENCE
+        )
+
+        return (
+            ai_signal,
+            combined,
+            approved,
+            (
+                f"ML confirms {ml_signal} "
+                f"({ml_probability:.2f}%)"
+            ),
+        )
+
+    # --------------------------------------------------------
+    # ML HOLD
+    #
+    # ML HOLD blocks directional AI.
+    # --------------------------------------------------------
+
+    if ml_signal == "HOLD":
+
+        return (
+            "HOLD",
+            round(
+                ai_confidence,
+                2,
+            ),
+            False,
+            (
+                f"ML HOLD blocks AI "
+                f"{ai_signal} "
+                f"({ml_probability:.2f}%)"
+            ),
+        )
+
+    # --------------------------------------------------------
+    # AI / ML DISAGREEMENT
+    # --------------------------------------------------------
+
+    penalized = (
+        ai_confidence
+        * CONFLICT_PENALTY
+    )
+
+    penalized = round(
+        penalized,
+        2,
+    )
+
+    return (
+        "HOLD",
+        penalized,
+        False,
+        (
+            f"ML disagreement: "
+            f"AI={ai_signal}, "
+            f"ML={ml_signal}, "
+            f"ML Probability="
+            f"{ml_probability:.2f}%"
+        ),
+    )
+
+
+# ============================================================
 # SIGNAL GENERATION
-# ====================================================
+# ============================================================
 
 def generate_signal_result(
     df: pd.DataFrame,
 ) -> SignalResult:
 
-    # ====================================================
+    # ========================================================
     # MARKET ANALYSIS
-    # ====================================================
+    # ========================================================
 
-    engine = evaluate_market(df)
+    engine = evaluate_market(
+        df
+    )
 
     ai = engine.confidence_result
 
@@ -405,8 +974,21 @@ def generate_signal_result(
 
     result = SignalResult()
 
+    # --------------------------------------------------------
+    # TIMESTAMP
+    # --------------------------------------------------------
+
+    result.timestamp = row.get(
+        "timestamp",
+        None,
+    )
+
+    # --------------------------------------------------------
+    # AI SCORE
+    # --------------------------------------------------------
+
     result.score = round(
-        ai.total_score,
+        float(ai.total_score),
         2,
     )
 
@@ -414,377 +996,405 @@ def generate_signal_result(
         engine.reasons
     )
 
+    # --------------------------------------------------------
+    # ENTRY
+    # --------------------------------------------------------
+
     result.entry = round(
         float(row["close"]),
         2,
     )
 
-    atr = float(row["atr"])
+    atr = float(
+        row["atr"]
+    )
 
-    MIN_CONFIDENCE = 60.0
+    # ========================================================
+    # AI SIGNAL
+    # ========================================================
 
-    # ====================================================
-    # AI MODEL PREDICTION
-    # ====================================================
+    ai_signal = _normalize_signal(
+        ai.decision
+    )
 
-    ml_signal = "HOLD"
-    ml_probability = 0.0
-
-    if AI_MODEL is not None:
-
-        try:
-
-            # Build features
-            features = build_features(df)
-
-            X = pd.DataFrame(
-                [features]
-            )
-
-            # Get model probabilities
-            probabilities = (
-                AI_MODEL.predict_proba(X)[0]
-            )
-
-            classes = AI_MODEL.classes_
-
-            # Highest probability class
-            best_index = probabilities.argmax()
-
-            prediction = classes[best_index]
-
-            ml_probability = (
-                float(
-                    probabilities[best_index]
-                )
-                * 100.0
-            )
-
-            # ====================================================
-            # CONVERT XGBOOST CLASSES
-            # ====================================================
-            #
-            # Model classes:
-            # 0 = SELL
-            # 1 = HOLD
-            # 2 = BUY
-            #
-            # QuantAI signals:
-            # SELL
-            # HOLD
-            # BUY
-            #
-
-            if prediction == 0:
-
-                ml_signal = "SELL"
-
-            elif prediction == 1:
-
-                ml_signal = "HOLD"
-
-            elif prediction == 2:
-
-                ml_signal = "BUY"
-
-            else:
-
-                ml_signal = "HOLD"
-
-            # ====================================================
-            # ML PROBABILITY DIAGNOSTICS
-            # ====================================================
-
-            ml_probabilities = {
-                int(cls): float(prob) * 100.0
-                for cls, prob in zip(
-                    classes,
-                    probabilities,
-                )
-            }
-
-            print()
-            print("ML PROBABILITIES")
-            print("-" * 60)
-
-            print(
-                f"BUY  : "
-                f"{ml_probabilities.get(2, 0.0):.2f}%"
-            )
-
-            print(
-                f"SELL : "
-                f"{ml_probabilities.get(0, 0.0):.2f}%"
-            )
-
-            print(
-                f"HOLD : "
-                f"{ml_probabilities.get(1, 0.0):.2f}%"
-            )
-
-            print(
-                f"ML SIGNAL      : "
-                f"{ml_signal}"
-            )
-
-            print(
-                f"ML PROBABILITY : "
-                f"{ml_probability:.2f}%"
-            )
-
-            print("-" * 60)
-
-        except Exception as e:
-
-            print()
-            print(
-                f"ML prediction error: {e}"
-            )
-
-            ml_signal = "HOLD"
-            ml_probability = 0.0
-
-    # ====================================================
-    # ML CONFIRMATION v2
-    # ====================================================
-    
-    # ----------------------------------------------------
-    # AI + ML directional fusion
-    #
-    # Rules:
-    #
-    # 1. AI HOLD -> cannot create a trade
-    # 2. ML HOLD -> blocks AI BUY/SELL
-    # 3. AI and ML agreement -> confirmation
-    # 4. AI BUY + ML SELL -> HOLD
-    # 5. AI SELL + ML BUY -> HOLD
-    # ----------------------------------------------------
-    
-    ai_confidence_before_ml = float(
+    ai_confidence = _clamp_probability(
         ai.confidence
     )
-    
-    # ----------------------------------------------------
-    # AI HOLD
-    # ----------------------------------------------------
-    
-    if ai.decision == "HOLD":
-    
-        ai.confidence = ai_confidence_before_ml
-    
-        result.reasons.append(
-            f"AI HOLD: ML={ml_signal} "
-            f"({ml_probability:.2f}%)" 
-        )
-    
-        fusion_signal = "HOLD"
-    
-    # ----------------------------------------------------
-    # ML HOLD
-    # ----------------------------------------------------
-    
-    elif ml_signal == "HOLD":
-    
-        ai.confidence = ai_confidence_before_ml
-    
-        result.reasons.append(
-            f"ML HOLD blocks AI {ai.decision} "
-            f"({ml_probability:.2f}%)"
-        )
-    
-        fusion_signal = "HOLD"
-    
-    # ----------------------------------------------------
-    # AI + ML AGREEMENT
-    # ----------------------------------------------------
-    
-    elif ml_signal == ai.decision:
-    
-        combined_confidence = (
-            ai_confidence_before_ml * 0.60
-            +
-            ml_probability * 0.40
-        )
-    
-        ai.confidence = combined_confidence
-    
-        result.reasons.append(
-            f"ML confirms {ml_signal} "
-            f"({ml_probability:.2f}%)"
-        )
-    
-        fusion_signal = ai.decision
-    
-    # ----------------------------------------------------
-    # AI + ML DISAGREEMENT
-    # ----------------------------------------------------
-    
-    else:
-    
-        penalized_confidence = (
-            ai_confidence_before_ml * 0.70
-        )
-    
-        ai.confidence = penalized_confidence
-    
-        result.reasons.append(
-            f"ML disagreement: " 
-            f"AI={ai.decision}, "
-            f"ML={ml_signal}, "
-            f"ML Probability="
-            f"{ml_probability:.2f}%"
-        )
-    
-        fusion_signal = "HOLD"
 
-    
-    # ====================================================
-    # CONFIDENCE DIAGNOSTICS
-    # ====================================================
-    
-    combined_confidence = float(
-        ai.confidence
-    )
-    
-    print()
-    print("CONFIDENCE DIAGNOSTICS")
-    print("-" * 60)
-    
-    print(
-        f"AI CONFIDENCE       : "
-        f"{ai_confidence_before_ml:.2f}%"
-    )
-    
-    print(
-        f"ML SIGNAL           : "
-        f"{ml_signal}"
-    )
-    
-    print(
-        f"ML PROBABILITY      : "
-        f"{ml_probability:.2f}%"
-    )
-    
-    print(
-        f"COMBINED CONFIDENCE : "
-        f"{combined_confidence:.2f}%"
-    )
-    
-    print(
-        f"FUSION SIGNAL       : "
-        f"{fusion_signal}"
-    )
-    
-    print("-" * 60)
-    
-    
-    # ====================================================
-    # SAVE FINAL CONFIDENCE
-    # ====================================================
-    
-    result.confidence = round(
-        combined_confidence,
+    result.ai_signal = ai_signal
+
+    result.ai_confidence = round(
+        ai_confidence,
         2,
     )
-    
-    
-    # ====================================================
-    # FINAL FUSION FILTER
-    # ====================================================
-    
-    if (
-        ai.confidence < MIN_CONFIDENCE
-        or fusion_signal == "HOLD"
-    ):
-    
+
+    # ========================================================
+    # ML PREDICTION
+    # ========================================================
+
+    (
+        ml_signal,
+        ml_probability,
+        ml_probabilities,
+    ) = predict_ml(df)
+
+    ml_signal = _normalize_signal(
+        ml_signal
+    )
+
+    ml_probability = _clamp_probability(
+        ml_probability
+    )
+
+    ml_buy_probability = _clamp_probability(
+        ml_probabilities.get(
+            2,
+            0.0,
+        )
+    )
+
+    ml_sell_probability = _clamp_probability(
+        ml_probabilities.get(
+            0,
+            0.0,
+        )
+    )
+
+    ml_hold_probability = _clamp_probability(
+        ml_probabilities.get(
+            1,
+            0.0,
+        )
+    )
+
+    result.ml_signal = ml_signal
+
+    result.ml_probability = round(
+        ml_probability,
+        2,
+    )
+
+    result.ml_buy_probability = round(
+        ml_buy_probability,
+        2,
+    )
+
+    result.ml_sell_probability = round(
+        ml_sell_probability,
+        2,
+    )
+
+    result.ml_hold_probability = round(
+        ml_hold_probability,
+        2,
+    )
+
+    # ========================================================
+    # ML DIAGNOSTICS
+    # ========================================================
+
+    print()
+
+    print(
+        "=" * 60
+    )
+
+    print(
+        "ML PROBABILITIES"
+    )
+
+    print(
+        "-" * 60
+    )
+
+    print(
+        f"BUY  : "
+        f"{ml_buy_probability:.2f}%"
+    )
+
+    print(
+        f"SELL : "
+        f"{ml_sell_probability:.2f}%"
+    )
+
+    print(
+        f"HOLD : "
+        f"{ml_hold_probability:.2f}%"
+    )
+
+    print()
+
+    print(
+        f"ML SIGNAL      : "
+        f"{ml_signal}"
+    )
+
+    print(
+        f"ML PROBABILITY : "
+        f"{ml_probability:.2f}%"
+    )
+
+    print(
+        "=" * 60
+    )
+
+    # ========================================================
+    # AI + ML FUSION
+    # ========================================================
+
+    (
+        fusion_signal,
+        combined_confidence,
+        approved,
+        fusion_reason,
+    ) = fuse_ai_ml(
+        ai_signal=ai_signal,
+        ai_confidence=ai_confidence,
+        ml_signal=ml_signal,
+        ml_probability=ml_probability,
+    )
+
+    result.fusion_signal = _normalize_signal(
+        fusion_signal
+    )
+
+    result.combined_confidence = round(
+        _clamp_probability(
+            combined_confidence
+        ),
+        2,
+    )
+
+    result.trade_approved = bool(
+        approved
+    )
+
+    result.fusion_reason = str(
+        fusion_reason
+    )
+
+    # ========================================================
+    # FUSION DIAGNOSTICS
+    # ========================================================
+
+    print()
+
+    print(
+        "=" * 60
+    )
+
+    print(
+        "AI + ML FUSION v2"
+    )
+
+    print(
+        "=" * 60
+    )
+
+    print(
+        f"AI SIGNAL          : "
+        f"{ai_signal}"
+    )
+
+    print(
+        f"AI CONFIDENCE      : "
+        f"{ai_confidence:.2f}%"
+    )
+
+    print(
+        f"ML SIGNAL          : "
+        f"{ml_signal}"
+    )
+
+    print(
+        f"ML PROBABILITY     : "
+        f"{ml_probability:.2f}%"
+    )
+
+    print(
+        f"FUSION SIGNAL      : "
+        f"{fusion_signal}"
+    )
+
+    print(
+        f"COMBINED CONFIDENCE: "
+        f"{combined_confidence:.2f}%"
+    )
+
+    print(
+        f"TRADE APPROVED     : "
+        f"{approved}"
+    )
+
+    print(
+        f"REASON             : "
+        f"{fusion_reason}"
+    )
+
+    print(
+        "=" * 60
+    )
+
+    # ========================================================
+    # FINAL RESULT CONFIDENCE
+    # ========================================================
+
+    result.confidence = round(
+        result.combined_confidence,
+        2,
+    )
+
+    result.reasons.append(
+        fusion_reason
+    )
+
+    # ========================================================
+    # FINAL APPROVAL FILTER
+    # ========================================================
+
+    if not approved:
+
         result.signal = "HOLD"
-    
-        result.stop_loss = result.entry
-    
-        result.take_profit = result.entry
-    
-        if fusion_signal == "HOLD":
-    
+
+        result.stop_loss = (
+            result.entry
+        )
+
+        result.take_profit = (
+            result.entry
+        )
+
+        if (
+            fusion_signal == "HOLD"
+            and "ML disagreement"
+            in fusion_reason
+        ):
+
             result.reasons.append(
-                "ML/AI fusion did not approve trade"
+                "AI/ML disagreement "
+                "did not approve trade"
             )
-    
-        else:  
-    
+
+        elif (
+            fusion_signal == "HOLD"
+            and "ML HOLD"
+            in fusion_reason
+        ):
+
             result.reasons.append(
-                f"Confidence too low "
-                f"({ai.confidence:.1f}%)"
+                "ML HOLD did not approve trade"
+            )
+
+        elif ai_signal == "HOLD":
+
+            result.reasons.append(
+                "AI HOLD cannot create trade"
+            )
+
+        else:
+
+            result.reasons.append(
+                f"Confidence below "
+                f"threshold or fusion "
+                f"not approved "
+                f"({combined_confidence:.2f}%)"
             )
 
         return result
-    
-    
-    # ====================================================
+
+    # ========================================================
     # BUY
-    # ====================================================
-    
+    # ========================================================
+
     if fusion_signal == "BUY":
-    
+
         result.signal = "BUY"
-    
+
         sl, tp = calculate_sl_tp(
             entry_price=result.entry,
             atr=atr,
         )
-    
-        result.stop_loss = sl
-    
-        result.take_profit = tp
-    
+
+        result.stop_loss = round(
+            float(sl),
+            2,
+        )
+
+        result.take_profit = round(
+            float(tp),
+            2,
+        )
+
+        result.reasons.append(
+            "BUY approved by AI + ML fusion"
+        )
+
         return result
-    
-    
-    # ====================================================
+
+    # ========================================================
     # SELL
-    # ====================================================
-    
+    # ========================================================
+
     if fusion_signal == "SELL":
-    
+
         result.signal = "SELL"
-    
+
         sl, tp = calculate_sl_tp(
-            entry_price=result.entry, 
+            entry_price=result.entry,
             atr=atr,
         )
-    
-        risk = result.entry - sl
-    
-        reward = tp - result.entry
-    
+
+        # ----------------------------------------------------
+        # calculate_sl_tp returns BUY-oriented levels.
+        # Convert them to SELL orientation.
+        # ----------------------------------------------------
+
+        risk = abs(
+            result.entry
+            - float(sl)
+        )
+
+        reward = abs(
+            float(tp)
+            - result.entry
+        )
+
         result.stop_loss = round(
             result.entry + risk,
             2,
         )
-    
+
         result.take_profit = round(
             result.entry - reward,
             2,
         )
-    
-        return result
-    
-    
-    # ====================================================
-    # HOLD
-    # ====================================================
-    
-    result.signal = "HOLD"
-    
-    result.stop_loss = result.entry
-    
-    result.take_profit = result.entry
-    
-    return result
-    
 
-# ====================================================
+        result.reasons.append(
+            "SELL approved by AI + ML fusion"
+        )
+
+        return result
+
+    # ========================================================
+    # FALLBACK
+    # ========================================================
+
+    result.signal = "HOLD"
+
+    result.stop_loss = (
+        result.entry
+    )
+
+    result.take_profit = (
+        result.entry
+    )
+
+    return result
+
+
+# ============================================================
 # PRINT SIGNAL
-# ====================================================
+# ============================================================
 
 def print_signal(
     result: SignalResult,
@@ -792,34 +1402,118 @@ def print_signal(
 
     print()
 
-    print("=" * 60)
-    print("STRATEGY SIGNAL")
-    print("=" * 60)
+    print(
+        "=" * 60
+    )
 
-    print(f"Signal         : {result.signal}")
-    print(f"Confidence     : {result.confidence:.2f}%")
-    print(f"Score          : {result.score:.2f}")
+    print(
+        "STRATEGY SIGNAL v2.0"
+    )
+
+    print(
+        "=" * 60
+    )
+
+    print(
+        f"Signal         : "
+        f"{result.signal}"
+    )
+
+    print(
+        f"Confidence     : "
+        f"{result.confidence:.2f}%"
+    )
+
+    print(
+        f"Score          : "
+        f"{result.score:.2f}"
+    )
 
     print()
 
-    print(f"Entry          : {result.entry:.2f}")
-    print(f"Stop Loss      : {result.stop_loss:.2f}")
-    print(f"Take Profit    : {result.take_profit:.2f}")
+    print(
+        f"AI Signal      : "
+        f"{result.ai_signal}"
+    )
+
+    print(
+        f"AI Confidence  : "
+        f"{result.ai_confidence:.2f}%"
+    )
+
+    print(
+        f"ML Signal      : "
+        f"{result.ml_signal}"
+    )
+
+    print(
+        f"ML Probability : "
+        f"{result.ml_probability:.2f}%"
+    )
+
+    print(
+        f"Fusion Signal  : "
+        f"{result.fusion_signal}"
+    )
+
+    print(
+        f"Combined Conf. : "
+        f"{result.combined_confidence:.2f}%"
+    )
+
+    print(
+        f"Approved       : "
+        f"{result.trade_approved}"
+    )
 
     print()
 
-    print("Reasons:")
+    print(
+        f"Entry          : "
+        f"{result.entry:.2f}"
+    )
+
+    print(
+        f"Stop Loss      : "
+        f"{result.stop_loss:.2f}"
+    )
+
+    print(
+        f"Take Profit    : "
+        f"{result.take_profit:.2f}"
+    )
+
+    print()
+
+    print(
+        "Reasons:"
+    )
 
     for reason in result.reasons:
-        print(f" • {reason}")
 
-    print("=" * 60)
+        print(
+            f" • {reason}"
+        )
 
+    print(
+        "=" * 60
+    )
+
+
+# ============================================================
+# PUBLIC API
+# ============================================================
 
 __all__ = [
+    "MIN_CONFIDENCE",
+    "AI_WEIGHT",
+    "ML_WEIGHT",
+    "CONFLICT_PENALTY",
     "SignalResult",
     "MarketEngine",
     "evaluate_market",
+    "predict_ml",
+    "fuse_ai_ml",
     "generate_signal_result",
     "print_signal",
 ]

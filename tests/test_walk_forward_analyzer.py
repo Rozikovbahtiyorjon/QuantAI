@@ -11,7 +11,7 @@ from src.walk_forward_analyzer import (
     WalkForwardAnalyzer,
 )
 from src.walk_forward_engine import (
-    WalkForwardResult,
+    WalkForwardWindowResult,
 )
 
 
@@ -27,7 +27,7 @@ def make_result(
     losses: int,
     initial: float,
     final: float,
-):
+) -> WalkForwardWindowResult:
 
     backtest = BacktestResult(
         initial_balance=initial,
@@ -44,14 +44,34 @@ def make_result(
         trades=[],
     )
 
-    return WalkForwardResult(
-        window_number=window_number,
+    train_start = (
+        window_number - 1
+    ) * 5
 
-        train_start=f"train-{window_number}-start",
-        train_end=f"train-{window_number}-end",
+    train_end = train_start + 10
 
-        test_start=f"test-{window_number}-start",
-        test_end=f"test-{window_number}-end",
+    test_start = train_end
+
+    test_end = test_start + 5
+
+    return WalkForwardWindowResult(
+        window_id=window_number,
+
+        train_start=train_start,
+        train_end=train_end,
+
+        test_start=test_start,
+        test_end=test_end,
+
+        train_size=(
+            train_end
+            - train_start
+        ),
+
+        test_size=(
+            test_end
+            - test_start
+        ),
 
         backtest_result=backtest,
     )
@@ -84,11 +104,29 @@ def test_empty_results():
 def test_total_windows():
 
     results = [
-        make_result(1, 10.0, 2, 1, 1, 1000.0, 1010.0),
-        make_result(2, 20.0, 3, 2, 1, 1010.0, 1030.0),
+        make_result(
+            1,
+            10.0,
+            2,
+            1,
+            1,
+            1000.0,
+            1010.0,
+        ),
+        make_result(
+            2,
+            20.0,
+            3,
+            2,
+            1,
+            1010.0,
+            1030.0,
+        ),
     ]
 
-    analyzer = WalkForwardAnalyzer(results)
+    analyzer = WalkForwardAnalyzer(
+        results
+    )
 
     assert analyzer.total_windows == 2
 
@@ -100,11 +138,29 @@ def test_total_windows():
 def test_trade_counts_are_aggregated():
 
     results = [
-        make_result(1, 10.0, 2, 1, 1, 1000.0, 1010.0),
-        make_result(2, 20.0, 3, 2, 1, 1010.0, 1030.0),
+        make_result(
+            1,
+            10.0,
+            2,
+            1,
+            1,
+            1000.0,
+            1010.0,
+        ),
+        make_result(
+            2,
+            20.0,
+            3,
+            2,
+            1,
+            1010.0,
+            1030.0,
+        ),
     ]
 
-    analyzer = WalkForwardAnalyzer(results)
+    analyzer = WalkForwardAnalyzer(
+        results
+    )
 
     assert analyzer.total_trades == 5
     assert analyzer.winning_trades == 3
@@ -118,12 +174,38 @@ def test_trade_counts_are_aggregated():
 def test_total_profit():
 
     results = [
-        make_result(1, 10.25, 2, 1, 1, 1000.0, 1010.25),
-        make_result(2, -5.25, 2, 1, 1, 1010.25, 1005.00),
-        make_result(3, 20.00, 2, 2, 0, 1005.00, 1025.00),
+        make_result(
+            1,
+            10.25,
+            2,
+            1,
+            1,
+            1000.0,
+            1010.25,
+        ),
+        make_result(
+            2,
+            -5.25,
+            2,
+            1,
+            1,
+            1010.25,
+            1005.00,
+        ),
+        make_result(
+            3,
+            20.00,
+            2,
+            2,
+            0,
+            1005.00,
+            1025.00,
+        ),
     ]
 
-    analyzer = WalkForwardAnalyzer(results)
+    analyzer = WalkForwardAnalyzer(
+        results
+    )
 
     assert analyzer.total_profit == 25.00
 
@@ -135,11 +217,29 @@ def test_total_profit():
 def test_initial_and_final_balance():
 
     results = [
-        make_result(1, 10.0, 1, 1, 0, 1000.0, 1010.0),
-        make_result(2, 15.0, 1, 1, 0, 1010.0, 1025.0),
+        make_result(
+            1,
+            10.0,
+            1,
+            1,
+            0,
+            1000.0,
+            1010.0,
+        ),
+        make_result(
+            2,
+            15.0,
+            1,
+            1,
+            0,
+            1010.0,
+            1025.0,
+        ),
     ]
 
-    analyzer = WalkForwardAnalyzer(results)
+    analyzer = WalkForwardAnalyzer(
+        results
+    )
 
     assert analyzer.initial_balance == 1000.0
     assert analyzer.final_balance == 1025.0
@@ -152,13 +252,47 @@ def test_initial_and_final_balance():
 def test_profitable_and_losing_windows():
 
     results = [
-        make_result(1, 10.0, 1, 1, 0, 1000.0, 1010.0),
-        make_result(2, -5.0, 1, 0, 1, 1010.0, 1005.0),
-        make_result(3, 20.0, 1, 1, 0, 1005.0, 1025.0),
-        make_result(4, 0.0, 1, 0, 1, 1025.0, 1025.0),
+        make_result(
+            1,
+            10.0,
+            1,
+            1,
+            0,
+            1000.0,
+            1010.0,
+        ),
+        make_result(
+            2,
+            -5.0,
+            1,
+            0,
+            1,
+            1010.0,
+            1005.0,
+        ),
+        make_result(
+            3,
+            20.0,
+            1,
+            1,
+            0,
+            1005.0,
+            1025.0,
+        ),
+        make_result(
+            4,
+            0.0,
+            1,
+            0,
+            1,
+            1025.0,
+            1025.0,
+        ),
     ]
 
-    analyzer = WalkForwardAnalyzer(results)
+    analyzer = WalkForwardAnalyzer(
+        results
+    )
 
     assert analyzer.profitable_windows == 2
     assert analyzer.losing_windows == 1
@@ -171,11 +305,29 @@ def test_profitable_and_losing_windows():
 def test_win_rate():
 
     results = [
-        make_result(1, 10.0, 4, 3, 1, 1000.0, 1010.0),
-        make_result(2, 10.0, 2, 1, 1, 1010.0, 1020.0),
+        make_result(
+            1,
+            10.0,
+            4,
+            3,
+            1,
+            1000.0,
+            1010.0,
+        ),
+        make_result(
+            2,
+            10.0,
+            2,
+            1,
+            1,
+            1010.0,
+            1020.0,
+        ),
     ]
 
-    analyzer = WalkForwardAnalyzer(results)
+    analyzer = WalkForwardAnalyzer(
+        results
+    )
 
     assert analyzer.win_rate == 66.67
 
@@ -187,11 +339,29 @@ def test_win_rate():
 def test_summary():
 
     results = [
-        make_result(1, 10.0, 2, 1, 1, 1000.0, 1010.0),
-        make_result(2, 20.0, 3, 2, 1, 1010.0, 1030.0),
+        make_result(
+            1,
+            10.0,
+            2,
+            1,
+            1,
+            1000.0,
+            1010.0,
+        ),
+        make_result(
+            2,
+            20.0,
+            3,
+            2,
+            1,
+            1010.0,
+            1030.0,
+        ),
     ]
 
-    analyzer = WalkForwardAnalyzer(results)
+    analyzer = WalkForwardAnalyzer(
+        results
+    )
 
     summary = analyzer.summarize()
 
@@ -234,7 +404,9 @@ def test_cumulative_return():
         ),
     ]
 
-    analyzer = WalkForwardAnalyzer(results)
+    analyzer = WalkForwardAnalyzer(
+        results
+    )
 
     assert analyzer.cumulative_return == 3.0
 
@@ -284,7 +456,9 @@ def test_max_drawdown():
         ),
     ]
 
-    analyzer = WalkForwardAnalyzer(results)
+    analyzer = WalkForwardAnalyzer(
+        results
+    )
 
     assert analyzer.max_drawdown == 40.0
 
@@ -316,13 +490,15 @@ def test_max_drawdown_percent():
         ),
     ]
 
-    analyzer = WalkForwardAnalyzer(results)
+    analyzer = WalkForwardAnalyzer(
+        results
+    )
 
     assert analyzer.max_drawdown_percent == 3.92
 
 
 # =========================================================
-# 12. EMPTY DRAWdown
+# 12. EMPTY DRAWDOWN
 # =========================================================
 
 def test_empty_drawdown():
