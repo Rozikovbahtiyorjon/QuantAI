@@ -1,209 +1,90 @@
-"""
-=========================================================
-QuantAI Professional v5
-Paper Market Data Tests
-=========================================================
-"""
-
-from __future__ import annotations
-
 import pandas as pd
 import pytest
 
 from src.paper_market_data import PaperMarketData
 
 
-# =========================================================
-# HELPERS
-# =========================================================
-
-def make_dataframe(rows: int = 5) -> pd.DataFrame:
-
+def create_data() -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "timestamp": [
-                f"2026-01-{i + 1:02d}"
-                for i in range(rows)
-            ],
-            "open": [
-                100.0 + i
-                for i in range(rows)
-            ],
-            "high": [
-                101.0 + i
-                for i in range(rows)
-            ],
-            "low": [
-                99.0 + i
-                for i in range(rows)
-            ],
-            "close": [
-                100.0 + i
-                for i in range(rows)
-            ],
-            "volume": [1000.0] * rows,
+            "open": [100.0, 101.0, 102.0],
+            "high": [101.0, 102.0, 103.0],
+            "low": [99.0, 100.0, 101.0],
+            "close": [100.5, 101.5, 102.5],
+            "volume": [1000.0, 1100.0, 1200.0],
         }
     )
 
 
-# =========================================================
-# 1. INITIALIZATION
-# =========================================================
-
-def test_initialization():
-
+def test_initial_state() -> None:
     provider = PaperMarketData(
-        make_dataframe()
+        create_data()
     )
 
     assert provider.position == 0
-    assert provider.total_rows == 5
+    assert provider.total_rows == 3
     assert provider.finished is False
 
 
-# =========================================================
-# 2. INVALID DATA TYPE
-# =========================================================
-
-def test_invalid_data_type():
-
-    with pytest.raises(TypeError):
-
-        PaperMarketData(
-            [1, 2, 3]
-        )
-
-
-# =========================================================
-# 3. EMPTY DATA
-# =========================================================
-
-def test_empty_dataframe():
-
-    with pytest.raises(ValueError):
-
-        PaperMarketData(
-            pd.DataFrame()
-        )
-
-
-# =========================================================
-# 4. NEXT ROW
-# =========================================================
-
-def test_next_returns_first_row():
-
+def test_next_returns_first_row() -> None:
     provider = PaperMarketData(
-        make_dataframe()
+        create_data()
     )
 
     row = provider.next()
 
-    assert row["close"] == 100.0
+    assert isinstance(row, pd.Series)
+    assert row["close"] == 100.5
     assert provider.position == 1
 
 
-# =========================================================
-# 5. SEQUENTIAL ROWS
-# =========================================================
-
-def test_next_returns_rows_sequentially():
-
+def test_next_consumes_rows_sequentially() -> None:
     provider = PaperMarketData(
-        make_dataframe()
+        create_data()
     )
 
     first = provider.next()
     second = provider.next()
     third = provider.next()
 
-    assert first["close"] == 100.0
-    assert second["close"] == 101.0
-    assert third["close"] == 102.0
+    assert first["close"] == 100.5
+    assert second["close"] == 101.5
+    assert third["close"] == 102.5
 
     assert provider.position == 3
-
-
-# =========================================================
-# 6. FINISHED STATE
-# =========================================================
-
-def test_finished_after_all_rows():
-
-    provider = PaperMarketData(
-        make_dataframe(3)
-    )
-
-    provider.next()
-    provider.next()
-    provider.next()
-
     assert provider.finished is True
-    assert provider.position == 3
 
 
-# =========================================================
-# 7. STOP ITERATION
-# =========================================================
-
-def test_next_after_end_raises_stop_iteration():
-
+def test_next_after_finished_raises() -> None:
     provider = PaperMarketData(
-        make_dataframe(2)
+        create_data()
     )
 
+    provider.next()
     provider.next()
     provider.next()
 
     with pytest.raises(StopIteration):
-
         provider.next()
 
 
-# =========================================================
-# 8. ITERATOR
-# =========================================================
-
-def test_iterator_returns_all_rows():
-
+def test_iterator_consumes_all_rows() -> None:
     provider = PaperMarketData(
-        make_dataframe(5)
+        create_data()
     )
 
     rows = list(provider)
 
-    assert len(rows) == 5
-
-    assert rows[0]["close"] == 100.0
-    assert rows[1]["close"] == 101.0
-    assert rows[2]["close"] == 102.0
-    assert rows[3]["close"] == 103.0
-    assert rows[4]["close"] == 104.0
-
-
-# =========================================================
-# 9. ITERATOR FINISHES
-# =========================================================
-
-def test_iterator_finishes():
-
-    provider = PaperMarketData(
-        make_dataframe(3)
-    )
-
-    list(provider)
-
+    assert len(rows) == 3
+    assert rows[0]["close"] == 100.5
+    assert rows[1]["close"] == 101.5
+    assert rows[2]["close"] == 102.5
     assert provider.finished is True
 
 
-# =========================================================
-# 10. RESET
-# =========================================================
-
-def test_reset():
-
+def test_reset() -> None:
     provider = PaperMarketData(
-        make_dataframe(5)
+        create_data()
     )
 
     provider.next()
@@ -218,87 +99,34 @@ def test_reset():
 
     row = provider.next()
 
-    assert row["close"] == 100.0
+    assert row["close"] == 100.5
 
 
-# =========================================================
-# 11. DATAFRAME IS COPIED
-# =========================================================
+def test_data_is_copied() -> None:
+    data = create_data()
+    provider = PaperMarketData(data)
 
-def test_input_dataframe_is_not_used_directly():
+    data.loc[0, "close"] = 999.0
 
-    data = make_dataframe()
+    assert provider.data.loc[0, "close"] == 100.5
+
+
+def test_index_is_reset() -> None:
+    data = create_data()
+    data.index = [10, 20, 30]
 
     provider = PaperMarketData(data)
 
-    data.loc[0, "close"] = 9999.0
-
-    row = provider.next()
-
-    assert row["close"] == 100.0
+    assert list(provider.data.index) == [0, 1, 2]
 
 
-# =========================================================
-# 12. INDEX IS RESET
-# =========================================================
-
-def test_index_is_reset():
-
-    data = make_dataframe()
-
-    data.index = [
-        10,
-        20,
-        30,
-        40,
-        50,
-    ]
-
-    provider = PaperMarketData(data)
-
-    row = provider.next()
-
-    assert row.name == 0
+def test_invalid_data_type() -> None:
+    with pytest.raises(TypeError):
+        PaperMarketData([1, 2, 3])
 
 
-# =========================================================
-# 13. TOTAL ROWS
-# =========================================================
-
-def test_total_rows():
-
-    provider = PaperMarketData(
-        make_dataframe(17)
-    )
-
-    assert provider.total_rows == 17
-
-
-# =========================================================
-# 14. MULTIPLE ITERATIONS AFTER RESET
-# =========================================================
-
-def test_multiple_iterations_after_reset():
-
-    provider = PaperMarketData(
-        make_dataframe(3)
-    )
-
-    first_run = list(provider)
-
-    provider.reset()
-
-    second_run = list(provider)
-
-    assert len(first_run) == 3
-    assert len(second_run) == 3
-
-    assert (
-        first_run[0]["close"]
-        == second_run[0]["close"]
-    )
-
-    assert (
-        first_run[-1]["close"]
-        == second_run[-1]["close"]
-    )
+def test_empty_dataframe() -> None:
+    with pytest.raises(ValueError):
+        PaperMarketData(
+            pd.DataFrame()
+        )

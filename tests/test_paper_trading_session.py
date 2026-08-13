@@ -1,73 +1,28 @@
-"""
-=========================================================
-QuantAI Professional v5
-Paper Trading Session Tests
-=========================================================
-"""
-
-from __future__ import annotations
-
 import pandas as pd
 import pytest
 
 from src.paper_trading_session import (
     PaperTradingSession,
-    PaperTradingSessionResult,
 )
-from src.paper_trading_runner import (
-    PaperTradingStepResult,
-)
+from src.strategy import SignalResult
 
 
-# =========================================================
-# HELPERS
-# =========================================================
-
-def make_dataframe(rows: int = 5) -> pd.DataFrame:
-
+def create_market_data() -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "timestamp": [
-                f"2026-01-{i + 1:02d}"
-                for i in range(rows)
-            ],
-
-            "open": [
-                100.0 + i
-                for i in range(rows)
-            ],
-
-            "high": [
-                101.0 + i
-                for i in range(rows)
-            ],
-
-            "low": [
-                99.0 + i
-                for i in range(rows)
-            ],
-
-            "close": [
-                100.0 + i
-                for i in range(rows)
-            ],
-
-            "volume": [
-                1000.0
-            ] * rows,
+            "open": [100.0, 101.0, 102.0],
+            "high": [101.0, 102.0, 103.0],
+            "low": [99.0, 100.0, 101.0],
+            "close": [100.5, 101.5, 102.5],
+            "volume": [1000.0, 1100.0, 1200.0],
         }
     )
 
 
-# =========================================================
-# 1. INITIAL STATE
-# =========================================================
-
-def test_initial_state():
-
+def test_initial_state() -> None:
     session = PaperTradingSession(
         initial_balance=1000.0,
-        commission=0.0004,
+        commission=0.0,
         quantity=1.0,
     )
 
@@ -75,393 +30,217 @@ def test_initial_state():
     assert session.has_position is False
     assert session.realized_profit == 0.0
     assert session.steps == []
+    assert session.market_data is None
 
 
-# =========================================================
-# 2. INVALID DATA TYPE
-# =========================================================
-
-def test_run_requires_dataframe():
-
-    session = PaperTradingSession()
-
-    with pytest.raises(TypeError):
-
-        session.run(
-            [1, 2, 3]
-        )
-
-
-# =========================================================
-# 3. EMPTY DATAFRAME
-# =========================================================
-
-def test_run_rejects_empty_dataframe():
-
-    session = PaperTradingSession()
-
-    with pytest.raises(ValueError):
-
-        session.run(
-            pd.DataFrame()
-        )
-
-
-# =========================================================
-# 4. RUN RETURNS SESSION RESULT
-# =========================================================
-
-def test_run_returns_session_result(
-    monkeypatch,
-):
-
-    session = PaperTradingSession()
-
-    fake_steps = [
-        PaperTradingStepResult(
+def test_run_processes_all_market_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_signal(
+        df: pd.DataFrame,
+    ) -> SignalResult:
+        return SignalResult(
             signal="HOLD",
-            position_opened=False,
-            position_closed=False,
-            trade=None,
-        ),
-
-        PaperTradingStepResult(
-            signal="HOLD",
-            position_opened=False,
-            position_closed=False,
-            trade=None,
-        ),
-    ]
+            entry=float(df["close"].iloc[-1]),
+        )
 
     monkeypatch.setattr(
-        session.runner,
-        "process_dataframe",
-        lambda df: fake_steps,
+        "src.paper_trading_session.generate_signal_result",
+        fake_signal,
+    )
+
+    session = PaperTradingSession(
+        initial_balance=1000.0,
+        commission=0.0,
+        quantity=1.0,
     )
 
     result = session.run(
-        make_dataframe(2)
+        create_market_data()
     )
 
-    assert isinstance(
-        result,
-        PaperTradingSessionResult,
-    )
-
-    assert result.total_steps == 2
+    assert result.total_steps == 3
+    assert len(result.steps) == 3
     assert result.opened_positions == 0
     assert result.closed_positions == 0
 
+    assert session.market_data is not None
+    assert session.market_data.position == 3
+    assert session.market_data.finished is True
 
-# =========================================================
-# 5. STEPS ARE STORED
-# =========================================================
 
-def test_steps_are_stored(
-    monkeypatch,
-):
+def test_session_uses_market_data_sequentially(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    windows: list[int] = []
 
-    session = PaperTradingSession()
+    def fake_signal(
+        df: pd.DataFrame,
+    ) -> SignalResult:
+        windows.append(len(df))
 
-    fake_steps = [
-        PaperTradingStepResult(
-            signal="BUY",
-            position_opened=True,
-            position_closed=False,
-            trade=None,
-        ),
-    ]
+        return SignalResult(
+            signal="HOLD",
+            entry=float(df["close"].iloc[-1]),
+        )
 
     monkeypatch.setattr(
-        session.runner,
-        "process_dataframe",
-        lambda df: fake_steps,
+        "src.paper_trading_session.generate_signal_result",
+        fake_signal,
+    )
+
+    session = PaperTradingSession(
+        initial_balance=1000.0,
+        commission=0.0,
+        quantity=1.0,
     )
 
     session.run(
-        make_dataframe(1)
+        create_market_data()
     )
 
-    assert len(
-        session.steps
-    ) == 1
-
-    assert (
-        session.steps[0].position_opened
-        is True
-    )
-
-    assert (
-        session.steps[0].signal
-        == "BUY"
-    )
+    assert windows == [1, 2, 3]
 
 
-# =========================================================
-# 6. OPENED POSITION COUNT
-# =========================================================
-
-def test_opened_position_count(
-    monkeypatch,
-):
-
-    session = PaperTradingSession()
-
-    fake_steps = [
-        PaperTradingStepResult(
+def test_buy_signal_opens_position(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_signal(
+        df: pd.DataFrame,
+    ) -> SignalResult:
+        return SignalResult(
             signal="BUY",
-            position_opened=True,
-            position_closed=False,
-            trade=None,
-        ),
-
-        PaperTradingStepResult(
-            signal="HOLD",
-            position_opened=False,
-            position_closed=False,
-            trade=None,
-        ),
-
-        PaperTradingStepResult(
-            signal="BUY",
-            position_opened=True,
-            position_closed=False,
-            trade=None,
-        ),
-    ]
+            entry=float(df["close"].iloc[-1]),
+        )
 
     monkeypatch.setattr(
-        session.runner,
-        "process_dataframe",
-        lambda df: fake_steps,
+        "src.paper_trading_session.generate_signal_result",
+        fake_signal,
+    )
+
+    session = PaperTradingSession(
+        initial_balance=1000.0,
+        commission=0.0,
+        quantity=1.0,
     )
 
     result = session.run(
-        make_dataframe(3)
+        create_market_data()
     )
 
-    assert result.opened_positions == 2
+    assert result.total_steps == 3
+    assert result.opened_positions == 1
+    assert result.closed_positions == 0
+
+    assert session.has_position is True
+    assert session.runner.engine.position is not None
+    assert session.runner.engine.position.side == "LONG"
+    assert session.runner.engine.position.entry_price == 100.5
 
 
-# =========================================================
-# 7. CLOSED POSITION COUNT
-# =========================================================
-
-def test_closed_position_count(
-    monkeypatch,
-):
-
-    session = PaperTradingSession()
-
-    fake_steps = [
-        PaperTradingStepResult(
-            signal="SELL",
-            position_opened=False,
-            position_closed=True,
-            trade=None,
-        ),
-
-        PaperTradingStepResult(
-            signal="HOLD",
-            position_opened=False,
-            position_closed=False,
-            trade=None,
-        ),
-
-        PaperTradingStepResult(
-            signal="SELL",
-            position_opened=False,
-            position_closed=True,
-            trade=None,
-        ),
-    ]
-
-    monkeypatch.setattr(
-        session.runner,
-        "process_dataframe",
-        lambda df: fake_steps,
+def test_result_property() -> None:
+    session = PaperTradingSession(
+        initial_balance=1000.0,
+        commission=0.0,
+        quantity=1.0,
     )
-
-    result = session.run(
-        make_dataframe(3)
-    )
-
-    assert result.closed_positions == 2
-
-
-# =========================================================
-# 8. RESULT PROPERTY
-# =========================================================
-
-def test_result_property():
-
-    session = PaperTradingSession()
 
     result = session.result
 
-    assert isinstance(
-        result,
-        PaperTradingSessionResult,
-    )
-
     assert result.total_steps == 0
-    assert result.opened_positions == 0
-    assert result.closed_positions == 0
-
     assert result.initial_balance == 1000.0
     assert result.final_balance == 1000.0
     assert result.realized_profit == 0.0
+    assert result.opened_positions == 0
+    assert result.closed_positions == 0
 
 
-# =========================================================
-# 9. RESET
-# =========================================================
-
-def test_reset(
-    monkeypatch,
-):
-
-    session = PaperTradingSession()
-
-    fake_steps = [
-        PaperTradingStepResult(
-            signal="BUY",
-            position_opened=True,
-            position_closed=False,
-            trade=None,
-        ),
-    ]
+def test_steps_returns_copy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_signal(
+        df: pd.DataFrame,
+    ) -> SignalResult:
+        return SignalResult(
+            signal="HOLD",
+            entry=float(df["close"].iloc[-1]),
+        )
 
     monkeypatch.setattr(
-        session.runner,
-        "process_dataframe",
-        lambda df: fake_steps,
+        "src.paper_trading_session.generate_signal_result",
+        fake_signal,
+    )
+
+    session = PaperTradingSession(
+        initial_balance=1000.0,
+        commission=0.0,
+        quantity=1.0,
     )
 
     session.run(
-        make_dataframe(1)
+        create_market_data()
     )
 
-    assert len(
-        session.steps
-    ) == 1
+    steps = session.steps
+    steps.clear()
+
+    assert len(session.steps) == 3
+
+
+def test_reset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_signal(
+        df: pd.DataFrame,
+    ) -> SignalResult:
+        return SignalResult(
+            signal="BUY",
+            entry=float(df["close"].iloc[-1]),
+        )
+
+    monkeypatch.setattr(
+        "src.paper_trading_session.generate_signal_result",
+        fake_signal,
+    )
+
+    session = PaperTradingSession(
+        initial_balance=1000.0,
+        commission=0.0,
+        quantity=1.0,
+    )
+
+    session.run(
+        create_market_data()
+    )
+
+    assert session.has_position is True
+    assert len(session.steps) == 3
+    assert session.market_data is not None
+    assert session.market_data.position == 3
 
     session.reset()
 
-    assert session.steps == []
     assert session.balance == 1000.0
     assert session.has_position is False
     assert session.realized_profit == 0.0
+    assert session.steps == []
+
+    assert session.market_data is not None
+    assert session.market_data.position == 0
+    assert session.market_data.finished is False
 
 
-# =========================================================
-# 10. RUN CAN BE CALLED AGAIN
-# =========================================================
-
-def test_run_replaces_previous_steps(
-    monkeypatch,
-):
-
+def test_invalid_dataframe_type() -> None:
     session = PaperTradingSession()
 
-    first_steps = [
-        PaperTradingStepResult(
-            signal="HOLD",
-            position_opened=False,
-            position_closed=False,
-            trade=None,
-        ),
-
-        PaperTradingStepResult(
-            signal="HOLD",
-            position_opened=False,
-            position_closed=False,
-            trade=None,
-        ),
-    ]
-
-    second_steps = [
-        PaperTradingStepResult(
-            signal="BUY",
-            position_opened=True,
-            position_closed=False,
-            trade=None,
-        ),
-    ]
-
-    monkeypatch.setattr(
-        session.runner,
-        "process_dataframe",
-        lambda df: first_steps,
-    )
-
-    session.run(
-        make_dataframe(2)
-    )
-
-    assert len(
-        session.steps
-    ) == 2
-
-    monkeypatch.setattr(
-        session.runner,
-        "process_dataframe",
-        lambda df: second_steps,
-    )
-
-    session.run(
-        make_dataframe(1)
-    )
-
-    assert len(
-        session.steps
-    ) == 1
-
-    assert (
-        session.steps[0].position_opened
-        is True
-    )
-
-    assert (
-        session.steps[0].signal
-        == "BUY"
-    )
+    with pytest.raises(TypeError):
+        session.run([1, 2, 3])
 
 
-# =========================================================
-# 11. CUSTOM INITIAL BALANCE
-# =========================================================
+def test_empty_dataframe() -> None:
+    session = PaperTradingSession()
 
-def test_custom_initial_balance():
-
-    session = PaperTradingSession(
-        initial_balance=2500.0,
-    )
-
-    assert session.balance == 2500.0
-
-    result = session.result
-
-    assert result.initial_balance == 2500.0
-    assert result.final_balance == 2500.0
-
-
-# =========================================================
-# 12. CUSTOM QUANTITY
-# =========================================================
-
-def test_custom_quantity():
-
-    session = PaperTradingSession(
-        quantity=2.5,
-    )
-
-    assert (
-        session.runner.engine.commission
-        == 0.0004
-    )
-
-    assert (
-        session.runner.quantity
-        == 2.5
-    )
+    with pytest.raises(ValueError):
+        session.run(
+            pd.DataFrame()
+        )

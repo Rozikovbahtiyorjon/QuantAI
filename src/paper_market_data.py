@@ -1,19 +1,17 @@
 """
-=========================================================
 QuantAI Professional v5
 Paper Market Data
 
 Sequential market-data provider for paper trading.
 
 This module does NOT:
-    - generate signals
-    - calculate indicators
-    - execute trades
-    - connect to Binance
-    - train ML models
+- generate signals
+- calculate indicators
+- execute trades
+- connect to Binance
+- train ML models
 
 It only provides market rows sequentially.
-=========================================================
 """
 
 from __future__ import annotations
@@ -23,23 +21,18 @@ from typing import Iterator
 import pandas as pd
 
 
-# =========================================================
-# MARKET DATA PROVIDER
-# =========================================================
-
 class PaperMarketData:
     """
     Sequential market-data provider.
 
-    Each iteration returns one market-data row as a
-    pandas Series.
+    Each iteration returns one market-data row
+    as a pandas Series.
     """
 
     def __init__(
         self,
         data: pd.DataFrame,
     ) -> None:
-
         self.validate_data(data)
 
         self.data = data.reset_index(
@@ -47,10 +40,6 @@ class PaperMarketData:
         ).copy()
 
         self._position = 0
-
-    # =====================================================
-    # VALIDATION
-    # =====================================================
 
     @staticmethod
     def validate_data(
@@ -72,10 +61,6 @@ class PaperMarketData:
             raise ValueError(
                 "data cannot be empty."
             )
-
-    # =====================================================
-    # STATE
-    # =====================================================
 
     @property
     def position(self) -> int:
@@ -99,14 +84,7 @@ class PaperMarketData:
         Return True when all rows have been consumed.
         """
 
-        return (
-            self._position
-            >= self.total_rows
-        )
-
-    # =====================================================
-    # NEXT ROW
-    # =====================================================
+        return self._position >= self.total_rows
 
     def next(self) -> pd.Series:
         """
@@ -126,20 +104,15 @@ class PaperMarketData:
 
         return row
 
-    # =====================================================
-    # ITERATOR
-    # =====================================================
-
     def __iter__(
         self,
     ) -> Iterator[pd.Series]:
+        """
+        Iterate through market data sequentially.
+        """
 
         while not self.finished:
             yield self.next()
-
-    # =====================================================
-    # RESET
-    # =====================================================
 
     def reset(self) -> None:
         """
@@ -148,10 +121,6 @@ class PaperMarketData:
 
         self._position = 0
 
-
-# =========================================================
-# EXPORTS
-# =========================================================
 
 __all__ = [
     "PaperMarketData",
