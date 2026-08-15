@@ -1,0 +1,10 @@
+numpy
+pandas
+scikit-learn
+xgboost
+ta
+ccxt
+python-binance
+requests
+python-dotenv
+matplotlib
