@@ -16,6 +16,8 @@ ML Model
     ↓
 AI + ML Fusion v2
     ↓
+Order Flow Decision Gate
+    ↓
 Final Signal
     ↓
 Risk Manager
@@ -36,8 +38,19 @@ AI + ML Fusion v2 rules:
 8. Minimum trade confidence:
        60%
 
+Order Flow Strategy rules:
+
+1. Strategy HOLD -> Order Flow cannot create a trade
+2. Strategy not approved -> Order Flow cannot create a trade
+3. BUY + strong ASK pressure -> HOLD
+4. SELL + strong BID pressure -> HOLD
+5. Neutral BALANCED Order Flow is normalized to:
+       pressure = 0.0
+       score = 0.5
+6. BID/ASK pressure preserves full source precision
+
 This module does NOT execute trades.
-It only generates strategy signals.
+It only generates strategy signals and decision diagnostics.
 """
 
 from __future__ import annotations
@@ -51,6 +64,7 @@ from src.confidence_engine import ConfidenceEngine
 from src.feature_engine import build_features
 from src.model_manager import ModelManager
 from src.risk_manager import calculate_sl_tp
+from src.order_flow_intelligence import OrderFlowSignal
 
 
 # ============================================================
@@ -64,6 +78,8 @@ ML_WEIGHT = 0.40
 
 CONFLICT_PENALTY = 0.70
 
+ORDER_FLOW_CONFLICT_THRESHOLD = 0.15
+
 
 # ============================================================
 # SIGNAL RESULT
@@ -75,8 +91,7 @@ class SignalResult:
     Complete result of one Strategy Engine decision.
 
     Besides the final trading signal, this object contains
-    AI/ML/Fusion diagnostics so that SignalDiagnostics can
-    analyze decisions without coupling itself to Strategy.
+    AI/ML/Fusion and Order Flow diagnostics.
     """
 
     # --------------------------------------------------------
@@ -132,6 +147,24 @@ class SignalResult:
     trade_approved: bool = False
 
     fusion_reason: str = ""
+
+    # --------------------------------------------------------
+    # ORDER FLOW DIAGNOSTICS
+    # --------------------------------------------------------
+
+    order_flow_signal: str = "HOLD"
+
+    order_flow_enabled: bool = False
+
+    order_flow_approved: bool = False
+    
+    order_flow_context: str = "UNKNOWN"
+    
+    order_flow_score: float = 0.5
+    
+    order_flow_pressure: float = 0.0
+    
+    order_flow_reason: str = ""
 
     # --------------------------------------------------------
     # OPTIONAL CONTEXT
@@ -262,6 +295,70 @@ def _clamp_probability(
     )
 
 
+def _normalize_order_flow(
+    order_flow_signal: OrderFlowSignal,
+) -> tuple[str, float, float]:
+    """
+    Normalize Order Flow context, pressure and score.
+
+    BALANCED is explicitly treated as neutral because a balanced
+    order book can still have a small notional imbalance caused
+    only by different bid/ask prices.
+
+    Returns:
+
+        context
+        pressure
+        score
+    """
+
+    if not isinstance(
+        order_flow_signal,
+        OrderFlowSignal,
+    ):
+        raise TypeError(
+            "order_flow_signal must be an OrderFlowSignal instance."
+        )
+
+    context = str(
+        order_flow_signal.context
+    ).strip().upper()
+
+    if context == "BALANCED":
+        return (
+            "BALANCED",
+            0.0,
+            0.5,
+        )
+
+    pressure = float(
+        order_flow_signal.pressure
+    )
+
+    pressure = max(
+        -1.0,
+        min(
+            1.0,
+            pressure,
+        ),
+    )
+
+    score = max(
+        0.0,
+        min(
+            1.0,
+            0.5
+            + 0.5 * pressure,
+        ),
+    )
+
+    return (
+        context,
+        pressure,
+        score,
+    )
+
+
 # ============================================================
 # TREND ANALYZER
 # ============================================================
@@ -295,10 +392,6 @@ def evaluate_trend(
 
     score = 0.0
 
-    # --------------------------------------------------------
-    # EMA ALIGNMENT
-    # --------------------------------------------------------
-
     if ema_fast > ema_slow:
         score += 1.5
     else:
@@ -313,10 +406,6 @@ def evaluate_trend(
         score += 1.0
     else:
         score -= 1.0
-
-    # --------------------------------------------------------
-    # ADX
-    # --------------------------------------------------------
 
     if adx >= 40:
         score += 1.5
@@ -370,10 +459,6 @@ def evaluate_momentum(
 
     score = 0.0
 
-    # --------------------------------------------------------
-    # RSI
-    # --------------------------------------------------------
-
     if rsi >= 70:
         score += 2.0
 
@@ -392,18 +477,10 @@ def evaluate_momentum(
     elif rsi <= 45:
         score -= 1.0
 
-    # --------------------------------------------------------
-    # MACD
-    # --------------------------------------------------------
-
     if macd > macd_signal:
         score += 1.0
     else:
         score -= 1.0
-
-    # --------------------------------------------------------
-    # MACD HISTOGRAM
-    # --------------------------------------------------------
 
     if macd_hist > 0:
         score += 0.5
@@ -651,10 +728,6 @@ def evaluate_market(
         engine,
     )
 
-    # --------------------------------------------------------
-    # CONFIDENCE ENGINE
-    # --------------------------------------------------------
-
     confidence_engine = ConfidenceEngine()
 
     confidence_engine.add_component(
@@ -696,21 +769,6 @@ def evaluate_market(
 def predict_ml(
     df: pd.DataFrame,
 ) -> tuple[str, float, dict[int, float]]:
-    """
-    Get ML signal and complete class probabilities.
-
-    XGBoost classes:
-
-        0 = SELL
-        1 = HOLD
-        2 = BUY
-
-    Returns:
-
-        ml_signal
-        ml_probability
-        probabilities
-    """
 
     if AI_MODEL is None:
 
@@ -807,16 +865,6 @@ def fuse_ai_ml(
     ml_signal: str,
     ml_probability: float,
 ) -> tuple[str, float, bool, str]:
-    """
-    AI + ML Fusion v2.
-
-    Returns:
-
-        signal
-        combined_confidence
-        approved
-        reason
-    """
 
     ai_signal = _normalize_signal(
         ai_signal
@@ -834,10 +882,6 @@ def fuse_ai_ml(
         ml_probability
     )
 
-    # --------------------------------------------------------
-    # HOLD + HOLD
-    # --------------------------------------------------------
-
     if (
         ai_signal == "HOLD"
         and ml_signal == "HOLD"
@@ -853,12 +897,6 @@ def fuse_ai_ml(
             "AI HOLD + ML HOLD",
         )
 
-    # --------------------------------------------------------
-    # AI HOLD
-    #
-    # ML cannot create a trade.
-    # --------------------------------------------------------
-
     if ai_signal == "HOLD":
 
         return (
@@ -870,10 +908,6 @@ def fuse_ai_ml(
             False,
             f"AI HOLD blocks ML {ml_signal}",
         )
-
-    # --------------------------------------------------------
-    # AI + ML AGREEMENT
-    # --------------------------------------------------------
 
     if ml_signal == ai_signal:
 
@@ -902,12 +936,6 @@ def fuse_ai_ml(
             ),
         )
 
-    # --------------------------------------------------------
-    # ML HOLD
-    #
-    # ML HOLD blocks directional AI.
-    # --------------------------------------------------------
-
     if ml_signal == "HOLD":
 
         return (
@@ -923,10 +951,6 @@ def fuse_ai_ml(
                 f"({ml_probability:.2f}%)"
             ),
         )
-
-    # --------------------------------------------------------
-    # AI / ML DISAGREEMENT
-    # --------------------------------------------------------
 
     penalized = (
         ai_confidence
@@ -953,16 +977,269 @@ def fuse_ai_ml(
 
 
 # ============================================================
+# ORDER FLOW DECISION GATE
+# ============================================================
+
+def apply_order_flow_gate(
+    result: SignalResult,
+    order_flow_signal: OrderFlowSignal | None,
+    conflict_threshold: float = ORDER_FLOW_CONFLICT_THRESHOLD,
+) -> SignalResult:
+    """
+    Apply Order Flow as a final Strategy decision gate.
+
+    Strategy remains the primary decision source.
+
+    Order Flow cannot create a trade.
+
+    Order Flow can only:
+        - confirm a Strategy trade;
+        - leave it unchanged;
+        - block a conflicting BUY/SELL.
+
+    If no Order Flow signal is supplied, the original Strategy
+    result remains unchanged.
+    """
+
+    if not isinstance(
+        result,
+        SignalResult,
+    ):
+        raise AttributeError(
+            "strategy_result must be a SignalResult instance."
+        )
+
+    if order_flow_signal is None:
+        result.order_flow_enabled = False
+        result.order_flow_approved = True
+        result.order_flow_context = "UNKNOWN"
+        result.order_flow_score = 0.5
+        result.order_flow_pressure = 0.0
+        result.order_flow_reason = ""
+
+        return result
+
+    if not isinstance(
+        order_flow_signal,
+        OrderFlowSignal,
+    ):
+        raise TypeError(
+            "order_flow_signal must be an OrderFlowSignal instance."
+        )
+
+    result.order_flow_enabled = True
+
+    order_flow_context = str(
+        order_flow_signal.context
+    ).strip().upper()
+
+    if order_flow_context == "BALANCED":
+        order_flow_pressure = 0.0
+        order_flow_score = 0.5
+    else:
+        order_flow_pressure = float(
+            order_flow_signal.pressure
+        )
+
+        order_flow_score = max(
+            0.0,
+            min(
+                1.0,
+                0.5
+                + 0.5 * order_flow_pressure,
+            ),
+        )
+
+    result.order_flow_context = (
+        order_flow_context
+    )
+
+    result.order_flow_pressure = (
+        order_flow_pressure
+    )
+
+    result.order_flow_score = (
+        order_flow_score
+    )
+
+    strategy_signal = (
+        str(
+            result.signal
+        )
+        .strip()
+        .upper()
+    )
+
+    strategy_approved = bool(
+        result.trade_approved
+    )
+
+    # ========================================================
+    # STRATEGY NOT APPROVED
+    # ========================================================
+
+    if not strategy_approved:
+        result.signal = "HOLD"
+        result.trade_approved = False
+        result.order_flow_approved = False
+
+        result.stop_loss = result.entry
+        result.take_profit = result.entry
+
+        result.order_flow_reason = (
+            "Strategy trade approval is false; "
+            "OrderFlow cannot create a trade."
+        )
+
+        result.reasons.append(
+            f"OrderFlow: "
+            f"{result.order_flow_reason}"
+        )
+
+        return result
+
+    # ========================================================
+    # STRATEGY HOLD
+    # ========================================================
+
+    if strategy_signal == "HOLD":
+        result.signal = "HOLD"
+        result.trade_approved = False
+        result.order_flow_approved = False
+
+        result.stop_loss = result.entry
+        result.take_profit = result.entry
+
+        result.order_flow_reason = (
+            "Strategy HOLD; "
+            "OrderFlow cannot create a trade."
+        )
+
+        result.reasons.append(
+            f"OrderFlow: "
+            f"{result.order_flow_reason}"
+        )
+
+        return result
+
+    # ========================================================
+    # BUY
+    # ========================================================
+
+    if strategy_signal == "BUY":
+
+        if (
+            order_flow_pressure
+            <= -conflict_threshold
+        ):
+            result.signal = "HOLD"
+            result.trade_approved = False
+            result.order_flow_approved = False
+
+            result.stop_loss = result.entry
+            result.take_profit = result.entry
+
+            result.order_flow_reason = (
+                "OrderFlow conflicts with BUY "
+                "strategy signal."
+            )
+
+            result.reasons.append(
+                f"OrderFlow: "
+                f"{result.order_flow_reason}"
+            )
+
+            return result
+
+        result.order_flow_approved = True
+
+        result.order_flow_reason = (
+            "OrderFlow confirms or does not "
+            "conflict with BUY strategy signal."
+        )
+
+        result.reasons.append(
+            f"OrderFlow: "
+            f"{result.order_flow_reason}"
+        )
+
+        return result
+
+    # ========================================================
+    # SELL
+    # ========================================================
+
+    if strategy_signal == "SELL":
+
+        if (
+            order_flow_pressure
+            >= conflict_threshold
+        ):
+            result.signal = "HOLD"
+            result.trade_approved = False
+            result.order_flow_approved = False
+
+            result.stop_loss = result.entry
+            result.take_profit = result.entry
+
+            result.order_flow_reason = (
+                "OrderFlow conflicts with SELL "
+                "strategy signal."
+            )
+
+            result.reasons.append(
+                f"OrderFlow: "
+                f"{result.order_flow_reason}"
+            )
+
+            return result
+
+        result.order_flow_approved = True
+
+        result.order_flow_reason = (
+            "OrderFlow confirms or does not "
+            "conflict with SELL strategy signal."
+        )
+
+        result.reasons.append(
+            f"OrderFlow: "
+            f"{result.order_flow_reason}"
+        )
+
+        return result
+
+    # ========================================================
+    # UNSUPPORTED SIGNAL
+    # ========================================================
+
+    result.signal = "HOLD"
+    result.trade_approved = False
+    result.order_flow_approved = False
+
+    result.stop_loss = result.entry
+    result.take_profit = result.entry
+
+    result.order_flow_reason = (
+        f"Unsupported strategy signal: "
+        f"{strategy_signal}"
+    )
+
+    result.reasons.append(
+        f"OrderFlow: "
+        f"{result.order_flow_reason}"
+    )
+
+    return result
+
+
+# ============================================================
 # SIGNAL GENERATION
 # ============================================================
 
 def generate_signal_result(
     df: pd.DataFrame,
+    order_flow_signal: OrderFlowSignal | None = None,
 ) -> SignalResult:
-
-    # ========================================================
-    # MARKET ANALYSIS
-    # ========================================================
 
     engine = evaluate_market(
         df
@@ -974,18 +1251,10 @@ def generate_signal_result(
 
     result = SignalResult()
 
-    # --------------------------------------------------------
-    # TIMESTAMP
-    # --------------------------------------------------------
-
     result.timestamp = row.get(
         "timestamp",
         None,
     )
-
-    # --------------------------------------------------------
-    # AI SCORE
-    # --------------------------------------------------------
 
     result.score = round(
         float(ai.total_score),
@@ -995,10 +1264,6 @@ def generate_signal_result(
     result.reasons = list(
         engine.reasons
     )
-
-    # --------------------------------------------------------
-    # ENTRY
-    # --------------------------------------------------------
 
     result.entry = round(
         float(row["close"]),
@@ -1090,55 +1355,6 @@ def generate_signal_result(
     )
 
     # ========================================================
-    # ML DIAGNOSTICS
-    # ========================================================
-
-    print()
-
-    print(
-        "=" * 60
-    )
-
-    print(
-        "ML PROBABILITIES"
-    )
-
-    print(
-        "-" * 60
-    )
-
-    print(
-        f"BUY  : "
-        f"{ml_buy_probability:.2f}%"
-    )
-
-    print(
-        f"SELL : "
-        f"{ml_sell_probability:.2f}%"
-    )
-
-    print(
-        f"HOLD : "
-        f"{ml_hold_probability:.2f}%"
-    )
-
-    print()
-
-    print(
-        f"ML SIGNAL      : "
-        f"{ml_signal}"
-    )
-
-    print(
-        f"ML PROBABILITY : "
-        f"{ml_probability:.2f}%"
-    )
-
-    print(
-        "=" * 60
-    )
-
-    # ========================================================
     # AI + ML FUSION
     # ========================================================
 
@@ -1173,72 +1389,6 @@ def generate_signal_result(
         fusion_reason
     )
 
-    # ========================================================
-    # FUSION DIAGNOSTICS
-    # ========================================================
-
-    print()
-
-    print(
-        "=" * 60
-    )
-
-    print(
-        "AI + ML FUSION v2"
-    )
-
-    print(
-        "=" * 60
-    )
-
-    print(
-        f"AI SIGNAL          : "
-        f"{ai_signal}"
-    )
-
-    print(
-        f"AI CONFIDENCE      : "
-        f"{ai_confidence:.2f}%"
-    )
-
-    print(
-        f"ML SIGNAL          : "
-        f"{ml_signal}"
-    )
-
-    print(
-        f"ML PROBABILITY     : "
-        f"{ml_probability:.2f}%"
-    )
-
-    print(
-        f"FUSION SIGNAL      : "
-        f"{fusion_signal}"
-    )
-
-    print(
-        f"COMBINED CONFIDENCE: "
-        f"{combined_confidence:.2f}%"
-    )
-
-    print(
-        f"TRADE APPROVED     : "
-        f"{approved}"
-    )
-
-    print(
-        f"REASON             : "
-        f"{fusion_reason}"
-    )
-
-    print(
-        "=" * 60
-    )
-
-    # ========================================================
-    # FINAL RESULT CONFIDENCE
-    # ========================================================
-
     result.confidence = round(
         result.combined_confidence,
         2,
@@ -1256,13 +1406,8 @@ def generate_signal_result(
 
         result.signal = "HOLD"
 
-        result.stop_loss = (
-            result.entry
-        )
-
-        result.take_profit = (
-            result.entry
-        )
+        result.stop_loss = result.entry
+        result.take_profit = result.entry
 
         if (
             fusion_signal == "HOLD"
@@ -1300,13 +1445,11 @@ def generate_signal_result(
                 f"({combined_confidence:.2f}%)"
             )
 
-        return result
-
     # ========================================================
     # BUY
     # ========================================================
 
-    if fusion_signal == "BUY":
+    elif fusion_signal == "BUY":
 
         result.signal = "BUY"
 
@@ -1329,13 +1472,11 @@ def generate_signal_result(
             "BUY approved by AI + ML fusion"
         )
 
-        return result
-
     # ========================================================
     # SELL
     # ========================================================
 
-    if fusion_signal == "SELL":
+    elif fusion_signal == "SELL":
 
         result.signal = "SELL"
 
@@ -1343,11 +1484,6 @@ def generate_signal_result(
             entry_price=result.entry,
             atr=atr,
         )
-
-        # ----------------------------------------------------
-        # calculate_sl_tp returns BUY-oriented levels.
-        # Convert them to SELL orientation.
-        # ----------------------------------------------------
 
         risk = abs(
             result.entry
@@ -1373,21 +1509,29 @@ def generate_signal_result(
             "SELL approved by AI + ML fusion"
         )
 
-        return result
-
     # ========================================================
     # FALLBACK
     # ========================================================
 
-    result.signal = "HOLD"
+    else:
 
-    result.stop_loss = (
-        result.entry
-    )
+        result.signal = "HOLD"
 
-    result.take_profit = (
-        result.entry
-    )
+        result.stop_loss = result.entry
+        result.take_profit = result.entry
+
+        result.trade_approved = False
+
+    # ========================================================
+    # ORDER FLOW GATE
+    # ========================================================
+
+    if order_flow_signal is not None:
+
+        result = apply_order_flow_gate(
+            result,
+            order_flow_signal,
+        )
 
     return result
 
@@ -1469,6 +1613,33 @@ def print_signal(
     print()
 
     print(
+        f"Order Flow     : "
+        f"{result.order_flow_signal}"
+    )
+
+    print(
+        f"OF Context     : "
+        f"{result.order_flow_context}"
+    )
+
+    print(
+        f"OF Score       : "
+        f"{result.order_flow_score:.6f}"
+    )
+
+    print(
+        f"OF Pressure    : "
+        f"{result.order_flow_pressure:.6f}"
+    )
+
+    print(
+        f"OF Approved    : "
+        f"{result.order_flow_approved}"
+    )
+
+    print()
+
+    print(
         f"Entry          : "
         f"{result.entry:.2f}"
     )
@@ -1509,11 +1680,13 @@ __all__ = [
     "AI_WEIGHT",
     "ML_WEIGHT",
     "CONFLICT_PENALTY",
+    "ORDER_FLOW_CONFLICT_THRESHOLD",
     "SignalResult",
     "MarketEngine",
     "evaluate_market",
     "predict_ml",
     "fuse_ai_ml",
+    "apply_order_flow_gate",
     "generate_signal_result",
     "print_signal",
 ]

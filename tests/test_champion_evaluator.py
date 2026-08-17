@@ -1,6 +1,9 @@
 import pytest
 
-from src.champion_evaluator import ChampionEvaluator, EvaluationResult
+from src.champion_evaluator import (
+    ChampionEvaluator,
+    EvaluationResult,
+)
 
 
 def metrics(
@@ -22,29 +25,44 @@ def metrics(
 def test_default_weights_are_normalized():
     evaluator = ChampionEvaluator()
 
-    assert sum(evaluator.weights.values()) == pytest.approx(1.0)
+    assert sum(
+        evaluator.weights.values()
+    ) == pytest.approx(1.0)
 
 
 def test_evaluation_returns_expected_type():
-    evaluator = ChampionEvaluator()
+    result = ChampionEvaluator().evaluate(
+        metrics(),
+        metrics(),
+    )
 
-    result = evaluator.evaluate(metrics(), metrics())
-
-    assert isinstance(result, EvaluationResult)
+    assert isinstance(
+        result,
+        EvaluationResult,
+    )
 
 
 def test_equal_strategies_are_not_qualified():
-    evaluator = ChampionEvaluator()
-
-    result = evaluator.evaluate(metrics(), metrics())
+    result = ChampionEvaluator().evaluate(
+        metrics(),
+        metrics(),
+    )
 
     assert result.qualified is False
-    assert result.improvement == pytest.approx(0.0)
+    assert result.improvement == pytest.approx(
+        0.0
+    )
+
+    assert result.candidate_score == pytest.approx(
+        0.5
+    )
+
+    assert result.champion_score == pytest.approx(
+        0.5
+    )
 
 
 def test_better_candidate_is_qualified():
-    evaluator = ChampionEvaluator()
-
     candidate = metrics(
         profit_factor=2.0,
         net_profit=150.0,
@@ -53,15 +71,20 @@ def test_better_candidate_is_qualified():
         max_drawdown=8.0,
     )
 
-    result = evaluator.evaluate(candidate, metrics())
+    result = ChampionEvaluator().evaluate(
+        candidate,
+        metrics(),
+    )
 
     assert result.qualified is True
     assert result.improvement > 0
+    assert (
+        result.candidate_score
+        > result.champion_score
+    )
 
 
 def test_worse_candidate_is_rejected():
-    evaluator = ChampionEvaluator()
-
     candidate = metrics(
         profit_factor=1.2,
         net_profit=70.0,
@@ -70,36 +93,55 @@ def test_worse_candidate_is_rejected():
         max_drawdown=15.0,
     )
 
-    result = evaluator.evaluate(candidate, metrics())
+    result = ChampionEvaluator().evaluate(
+        candidate,
+        metrics(),
+    )
 
     assert result.qualified is False
     assert result.improvement < 0
+    assert (
+        result.candidate_score
+        < result.champion_score
+    )
 
 
 def test_lower_drawdown_improves_candidate_score():
-    evaluator = ChampionEvaluator()
+    result = ChampionEvaluator().evaluate(
+        metrics(
+            max_drawdown=5.0
+        ),
+        metrics(
+            max_drawdown=10.0
+        ),
+    )
 
-    candidate = metrics(max_drawdown=5.0)
-    champion = metrics(max_drawdown=10.0)
-
-    result = evaluator.evaluate(candidate, champion)
-
-    assert result.metrics["max_drawdown"] > 0
+    assert (
+        result.metrics["max_drawdown"]
+        > 0
+    )
 
 
 def test_higher_drawdown_reduces_candidate_score():
-    evaluator = ChampionEvaluator()
+    result = ChampionEvaluator().evaluate(
+        metrics(
+            max_drawdown=15.0
+        ),
+        metrics(
+            max_drawdown=10.0
+        ),
+    )
 
-    candidate = metrics(max_drawdown=15.0)
-    champion = metrics(max_drawdown=10.0)
-
-    result = evaluator.evaluate(candidate, champion)
-
-    assert result.metrics["max_drawdown"] < 0
+    assert (
+        result.metrics["max_drawdown"]
+        < 0
+    )
 
 
 def test_minimum_improvement_threshold():
-    evaluator = ChampionEvaluator(min_improvement=0.5)
+    evaluator = ChampionEvaluator(
+        min_improvement=0.5
+    )
 
     candidate = metrics(
         profit_factor=1.55,
@@ -109,42 +151,123 @@ def test_minimum_improvement_threshold():
         max_drawdown=9.5,
     )
 
-    result = evaluator.evaluate(candidate, metrics())
+    result = evaluator.evaluate(
+        candidate,
+        metrics(),
+    )
 
     assert result.qualified is False
 
 
 def test_compare_returns_boolean():
-    evaluator = ChampionEvaluator()
-
-    assert evaluator.compare(metrics(), metrics()) is False
+    assert (
+        ChampionEvaluator().compare(
+            metrics(),
+            metrics(),
+        )
+        is False
+    )
 
 
 def test_missing_metric_is_rejected():
-    evaluator = ChampionEvaluator()
-
     invalid = metrics()
-    invalid.pop("sharpe_ratio")
+
+    invalid.pop(
+        "sharpe_ratio"
+    )
 
     with pytest.raises(ValueError):
-        evaluator.evaluate(invalid, metrics())
+        ChampionEvaluator().evaluate(
+            invalid,
+            metrics(),
+        )
 
 
 def test_extra_metric_is_rejected():
-    evaluator = ChampionEvaluator()
-
     invalid = metrics()
+
     invalid["extra"] = 1.0
 
     with pytest.raises(ValueError):
-        evaluator.evaluate(invalid, metrics())
+        ChampionEvaluator().evaluate(
+            invalid,
+            metrics(),
+        )
 
 
 def test_non_numeric_metric_is_rejected():
-    evaluator = ChampionEvaluator()
-
     invalid = metrics()
+
     invalid["net_profit"] = "100"
 
     with pytest.raises(TypeError):
-        evaluator.evaluate(invalid, metrics())
+        ChampionEvaluator().evaluate(
+            invalid,
+            metrics(),
+        )
+
+
+def test_nan_metric_is_rejected():
+    invalid = metrics(
+        net_profit=float("nan")
+    )
+
+    with pytest.raises(ValueError):
+        ChampionEvaluator().evaluate(
+            invalid,
+            metrics(),
+        )
+
+
+def test_infinite_weight_is_rejected():
+    with pytest.raises(ValueError):
+        ChampionEvaluator(
+            weights={
+                "profit_factor": float("inf"),
+                "net_profit": 0.25,
+                "win_rate": 0.15,
+                "sharpe_ratio": 0.15,
+                "max_drawdown": 0.15,
+            }
+        )
+
+
+def test_zero_champion_metric_is_stable():
+    result = ChampionEvaluator().evaluate(
+        metrics(
+            profit_factor=2.0
+        ),
+        metrics(
+            profit_factor=0.0
+        ),
+    )
+
+    assert -1.0 <= result.improvement <= 1.0
+    assert result.qualified is True
+
+
+def test_pairwise_improvement_is_bounded():
+    candidate = metrics(
+        profit_factor=1000.0,
+        net_profit=100000.0,
+        win_rate=1.0,
+        sharpe_ratio=100.0,
+        max_drawdown=0.0,
+    )
+
+    champion = metrics(
+        profit_factor=-1000.0,
+        net_profit=-100000.0,
+        win_rate=0.0,
+        sharpe_ratio=-100.0,
+        max_drawdown=1000.0,
+    )
+
+    result = ChampionEvaluator().evaluate(
+        candidate,
+        champion,
+    )
+
+    assert -1.0 <= result.improvement <= 1.0
+    assert 0.0 <= result.candidate_score <= 1.0
+    assert 0.0 <= result.champion_score <= 1.0
