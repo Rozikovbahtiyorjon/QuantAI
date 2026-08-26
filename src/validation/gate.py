@@ -312,7 +312,7 @@ def check_walk_forward_smoke(data_dir: Path) -> CheckResult:
 
 
 def check_long_run_evidence(long_run_dir: Path, min_days: int = 30,
-                            min_trades: int = 30) -> CheckResult:
+                            min_trades: int | None = None) -> CheckResult:
     """
     Evaluates long-run paper artifacts produced by
     src/validation/long_run.py (state.json + journal.csv).
@@ -322,7 +322,12 @@ def check_long_run_evidence(long_run_dir: Path, min_days: int = 30,
 
     t0 = time.time()
     try:
-        crit = evaluate_long_run(long_run_dir, min_days=min_days, min_trades=min_trades)
+        crit = evaluate_long_run(
+            long_run_dir,
+            min_days=min_days,
+            min_trades=min_trades if min_trades is not None else 0,
+            auto_min_trades=(min_trades is None),
+        )
     except Exception as e:  # noqa: BLE001
         return CheckResult(
             name="long_run_paper",

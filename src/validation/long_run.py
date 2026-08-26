@@ -273,7 +273,8 @@ class LongRunSession:
 def evaluate_long_run(
     directory: Path,
     min_days: int = 30,
-    min_trades: int = 30,
+    min_trades: int | None = 30,
+    auto_min_trades: bool = False,
 ) -> dict:
     d = Path(directory)
     state_path = d / "state.json"
@@ -282,12 +283,14 @@ def evaluate_long_run(
     if not state_path.exists():
         raise FileNotFoundError(f"no state.json in {d}")
 
-    st = LongRunState.from_json(state_path.read_text(encoding="utf-8"))
+    # Raw-dict view: tolerant to BOTH single-symbol and portfolio
+    # state schemas (portfolio adds symbols/meta/last_rebalance_day).
+    raw = json.loads(state_path.read_text(encoding="utf-8"))
 
-    started = datetime.fromisoformat(st.started_at)
+    started = datetime.fromisoformat(raw["started_at"])
     updated = (
-        datetime.fromisoformat(st.updated_at)
-        if st.updated_at else datetime.now(timezone.utc)
+        datetime.fromisoformat(raw["updated_at"])
+        if raw.get("updated_at") else datetime.now(timezone.utc)
     )
     days_covered = (updated - started).total_seconds() / 86400.0
 
@@ -299,16 +302,24 @@ def evaluate_long_run(
             n_trades = len(rows)
             net = sum(float(r["net"]) for r in rows)
 
+    # Portfolio classes declare their own trade pace via state.meta
+    effective_min_trades = min_trades
+    if auto_min_trades:
+        meta_min = (raw.get("meta") or {}).get("min_trades_per_30d")
+        effective_min_trades = int(meta_min) if meta_min else 30
+
     days_ok = days_covered >= min_days
-    trades_ok = n_trades >= min_trades
-    incidents_ok = st.incidents == 0
-    alive_ok = st.balance > 0
+    trades_ok = n_trades >= (effective_min_trades or 0)
+    incidents_ok = int(raw.get("incidents", 0)) == 0
+    alive_ok = float(raw.get("balance", 0)) > 0
 
     passed = all([days_ok, trades_ok, incidents_ok, alive_ok])
 
     summary = (
-        f"days={days_covered:.1f}/{min_days} trades={n_trades}/{min_trades} "
-        f"incidents={st.incidents} net={net:.2f} balance={st.balance:.2f}"
+        f"days={days_covered:.1f}/{min_days} "
+        f"trades={n_trades}/{effective_min_trades} "
+        f"incidents={int(raw.get('incidents', 0))} "
+        f"net={net:.2f} balance={float(raw.get('balance', 0)):.2f}"
     )
 
     return {
@@ -317,9 +328,10 @@ def evaluate_long_run(
         "days_covered": round(days_covered, 2),
         "trades": n_trades,
         "net_pnl": round(net, 4),
-        "balance": round(st.balance, 4),
-        "incidents": st.incidents,
-        "signals_processed": st.signals_processed,
+        "balance": round(float(raw.get("balance", 0)), 4),
+        "incidents": int(raw.get("incidents", 0)),
+        "signals_processed": int(raw.get("signals_processed",
+                                        raw.get("rebalances", 0))),
         "checks": {
             "days_ok": days_ok, "trades_ok": trades_ok,
             "incidents_ok": incidents_ok, "alive_ok": alive_ok,
