@@ -38,7 +38,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
-import src.walk_forward_engine as walk_forward_module
+import src.walk.walk_forward_engine as walk_forward_module
 from src.walk_forward_engine import (
     DEFAULT_INITIAL_BALANCE,
     DEFAULT_TEST_SIZE,

@@ -31,7 +31,7 @@ from src.dataset_builder import DatasetBuilder, DatasetConfig
 from src.ml_engine import MLEngine, MLConfig, TrainingResult
 from src.model_manager import ModelManager
 from src.validation.purged_kfold import get_purged_cv
-from src.walk_forward_engine import (
+from src.walk.walk_forward_engine import (
     WalkForwardEngine,
     WalkForwardResult,
     WalkForwardWindowResult,

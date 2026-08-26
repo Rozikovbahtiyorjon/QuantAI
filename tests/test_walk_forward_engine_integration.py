@@ -29,7 +29,7 @@ from typing import List
 import pandas as pd
 import pytest
 
-import src.walk_forward_engine as walk_forward_module
+import src.walk.walk_forward_engine as walk_forward_module
 from src.walk_forward_engine import (
     WalkForwardEngine,
     WalkForwardResult,

@@ -28,6 +28,98 @@ from typing import List
 # =========================================================
 
 @dataclass
+class PaperAccountState:
+    """
+    Strict cash/fees/PnL ledger (R2.2).
+
+    Runs in PARALLEL with the legacy balance math. Identity guaranteed:
+
+        cash == initial_cash + realized_gross - fees_paid
+        engine.balance == cash   (after every operation)
+
+    Provides the foundation for future leverage / portfolio /
+    margin features without changing legacy behavior.
+    """
+
+    initial_cash: float
+
+    cash: float = 0.0
+    fees_paid: float = 0.0
+    realized_gross: float = 0.0
+
+    # open position snapshot (mirrors PaperPosition)
+    position_side: str | None = None
+    position_qty: float = 0.0
+    position_entry_price: float = 0.0
+    position_entry_notional: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.cash == 0.0 and self.fees_paid == 0.0 and self.realized_gross == 0.0:
+            self.cash = float(self.initial_cash)
+
+    # -------------------------------------------------- ops
+
+    def apply_open(self, side: str, price: float, quantity: float, entry_fee: float) -> None:
+        self.position_side = side
+        self.position_qty = float(quantity)
+        self.position_entry_price = float(price)
+        self.position_entry_notional = float(price) * float(quantity)
+        self.cash -= float(entry_fee)
+        self.fees_paid += float(entry_fee)
+
+    def apply_close(self, gross_profit: float, exit_fee: float, fees_total: float) -> None:
+        """
+        fees_total = entry_fee + exit_fee of the closed trade.
+        Entry fee was already deducted at apply_open.
+        """
+        self.cash += float(gross_profit)
+        self.cash -= float(exit_fee)
+        self.fees_paid += float(exit_fee)
+        self.realized_gross += float(gross_profit)
+
+        self.position_side = None
+        self.position_qty = 0.0
+        self.position_entry_price = 0.0
+        self.position_entry_notional = 0.0
+
+    def reset(self) -> None:
+        self.cash = float(self.initial_cash)
+        self.fees_paid = 0.0
+        self.realized_gross = 0.0
+        self.position_side = None
+        self.position_qty = 0.0
+        self.position_entry_price = 0.0
+        self.position_entry_notional = 0.0
+
+    # -------------------------------------------------- views
+
+    @property
+    def identity_gap(self) -> float:
+        """|cash - (initial + realized_gross - fees)| ; must be ~0."""
+        return abs(
+            self.cash - (self.initial_cash + self.realized_gross - self.fees_paid)
+        )
+
+    def unrealized(self, last_price: float) -> float:
+        """Mark-to-market PnL of the open position (0 when flat)."""
+        if self.position_side is None or self.position_qty == 0:
+            return 0.0
+        if self.position_side == "LONG":
+            return (float(last_price) - self.position_entry_price) * self.position_qty
+        return (self.position_entry_price - float(last_price)) * self.position_qty
+
+    def equity(self, last_price: float | None = None) -> float:
+        """
+        Flat: initial + realized net. With an open position and a
+        last price supplied: marked-to-market equity.
+        """
+        equity_flat = self.initial_cash + (self.realized_gross - self.fees_paid)
+        if last_price is not None and self.position_side is not None:
+            return equity_flat + self.unrealized(last_price)
+        return equity_flat
+
+
+@dataclass
 class PaperPosition:
     """
     Current virtual position.
@@ -101,6 +193,11 @@ class PaperTradingEngine:
         self.position: PaperPosition | None = None
 
         self.trade_history: List[PaperTrade] = []
+
+        # R2.2: strict parallel ledger (cash/fees/PnL identity).
+        self.account_state = PaperAccountState(
+            initial_cash=float(initial_balance)
+        )
 
     # =====================================================
     # POSITION STATE
@@ -189,6 +286,8 @@ class PaperTradingEngine:
             entry_fee=float(entry_fee),
         )
 
+        self.account_state.apply_open(side, float(price), float(quantity), float(entry_fee))
+
         return self.position
 
     # =====================================================
@@ -257,6 +356,18 @@ class PaperTradingEngine:
 
         self.balance -= exit_fee
 
+        self.account_state.apply_close(
+            gross_profit=float(gross_profit),
+            exit_fee=float(exit_fee),
+            fees_total=float(fees),
+        )
+
+        # R2.2 invariant: strict ledger mirrors legacy balance.
+        assert abs(self.account_state.cash - self.balance) < 1e-6, (
+            "PaperAccountState diverged from legacy balance: "
+            f"{self.account_state.cash} != {self.balance}"
+        )
+
         trade = PaperTrade(
             side=position.side,
             entry_price=entry_price,
@@ -292,12 +403,15 @@ class PaperTradingEngine:
 
         self.trade_history.clear()
 
+        self.account_state.reset()
+
 
 # =========================================================
 # EXPORTS
 # =========================================================
 
 __all__ = [
+    "PaperAccountState",
     "PaperPosition",
     "PaperTrade",
     "PaperTradingEngine",

@@ -808,7 +808,7 @@ def test_run_window_uses_only_test_dataframe():
     )
 
     with patch(
-        "src.walk_forward_engine.BacktestEngine"
+        "src.walk.walk_forward_engine.BacktestEngine"
     ) as mock_backtest_class:
 
         mock_backtest = mock_backtest_class.return_value
@@ -860,7 +860,7 @@ def test_run_window_returns_correct_window_result():
     )
 
     with patch(
-        "src.walk_forward_engine.BacktestEngine"
+        "src.walk.walk_forward_engine.BacktestEngine"
     ) as mock_backtest_class:
 
         mock_backtest_class.return_value.run.return_value = mock_result
@@ -995,7 +995,7 @@ def test_run_returns_walk_forward_result():
     )
 
     with patch(
-        "src.walk_forward_engine.BacktestEngine"
+        "src.walk.walk_forward_engine.BacktestEngine"
     ) as mock_backtest_class:
 
         mock_backtest_class.return_value.run.return_value = mock_result
@@ -1023,7 +1023,7 @@ def test_run_stores_latest_result():
     )
 
     with patch(
-        "src.walk_forward_engine.BacktestEngine"
+        "src.walk.walk_forward_engine.BacktestEngine"
     ) as mock_backtest_class:
 
         mock_backtest_class.return_value.run.return_value = mock_result
@@ -1052,7 +1052,7 @@ def test_run_initial_balance_is_preserved():
     )
 
     with patch(
-        "src.walk_forward_engine.BacktestEngine"
+        "src.walk.walk_forward_engine.BacktestEngine"
     ) as mock_backtest_class:
 
         mock_backtest_class.return_value.run.return_value = mock_result
@@ -1092,7 +1092,7 @@ def test_run_final_balance_matches_last_window():
     ]
 
     with patch(
-        "src.walk_forward_engine.BacktestEngine"
+        "src.walk.walk_forward_engine.BacktestEngine"
     ) as mock_backtest_class:
 
         mock_backtest_class.return_value.run.side_effect = mock_results
@@ -1132,7 +1132,7 @@ def test_run_rolls_balance_forward_between_windows():
     ]
 
     with patch(
-        "src.walk_forward_engine.BacktestEngine"
+        "src.walk.walk_forward_engine.BacktestEngine"
     ) as mock_backtest_class:
 
         mock_backtest_class.return_value.run.side_effect = mock_results
@@ -1162,7 +1162,7 @@ def test_run_calculates_net_profit_from_initial_balance():
     )
 
     with patch(
-        "src.walk_forward_engine.BacktestEngine"
+        "src.walk.walk_forward_engine.BacktestEngine"
     ) as mock_backtest_class:
 
         mock_backtest_class.return_value.run.return_value = mock_result
@@ -1209,7 +1209,7 @@ def test_run_aggregates_total_trades():
     ]
 
     with patch(
-        "src.walk_forward_engine.BacktestEngine"
+        "src.walk.walk_forward_engine.BacktestEngine"
     ) as mock_backtest_class:
 
         mock_backtest_class.return_value.run.side_effect = mock_results
@@ -1256,7 +1256,7 @@ def test_run_aggregates_winning_trades():
     ]
 
     with patch(
-        "src.walk_forward_engine.BacktestEngine"
+        "src.walk.walk_forward_engine.BacktestEngine"
     ) as mock_backtest_class:
 
         mock_backtest_class.return_value.run.side_effect = mock_results
@@ -1303,7 +1303,7 @@ def test_run_aggregates_losing_trades():
     ]
 
     with patch(
-        "src.walk_forward_engine.BacktestEngine"
+        "src.walk.walk_forward_engine.BacktestEngine"
     ) as mock_backtest_class:
 
         mock_backtest_class.return_value.run.side_effect = mock_results
@@ -1350,7 +1350,7 @@ def test_run_calculates_aggregate_win_rate():
     ]
 
     with patch(
-        "src.walk_forward_engine.BacktestEngine"
+        "src.walk.walk_forward_engine.BacktestEngine"
     ) as mock_backtest_class:
 
         mock_backtest_class.return_value.run.side_effect = mock_results
@@ -1381,7 +1381,7 @@ def test_run_handles_zero_trades():
     )
 
     with patch(
-        "src.walk_forward_engine.BacktestEngine"
+        "src.walk.walk_forward_engine.BacktestEngine"
     ) as mock_backtest_class:
 
         mock_backtest_class.return_value.run.return_value = mock_result
@@ -1413,7 +1413,7 @@ def test_run_creates_window_results():
     )
 
     with patch(
-        "src.walk_forward_engine.BacktestEngine"
+        "src.walk.walk_forward_engine.BacktestEngine"
     ) as mock_backtest_class:
 
         mock_backtest_class.return_value.run.return_value = mock_result
@@ -1441,7 +1441,7 @@ def test_run_window_ids_are_sequential():
     mock_result = make_mock_backtest_result()
 
     with patch(
-        "src.walk_forward_engine.BacktestEngine"
+        "src.walk.walk_forward_engine.BacktestEngine"
     ) as mock_backtest_class:
 
         mock_backtest_class.return_value.run.return_value = mock_result
@@ -1466,7 +1466,7 @@ def test_run_window_positions_are_correct():
     mock_result = make_mock_backtest_result()
 
     with patch(
-        "src.walk_forward_engine.BacktestEngine"
+        "src.walk.walk_forward_engine.BacktestEngine"
     ) as mock_backtest_class:
 
         mock_backtest_class.return_value.run.return_value = mock_result
@@ -1602,7 +1602,7 @@ def test_run_walk_forward_returns_result():
     )
 
     with patch(
-        "src.walk_forward_engine.BacktestEngine"
+        "src.walk.walk_forward_engine.BacktestEngine"
     ) as mock_backtest_class:
 
         mock_backtest_class.return_value.run.return_value = mock_result
@@ -1635,7 +1635,7 @@ def test_run_walk_forward_uses_configuration():
     mock_result = make_mock_backtest_result()
 
     with patch(
-        "src.walk_forward_engine.BacktestEngine"
+        "src.walk.walk_forward_engine.BacktestEngine"
     ) as mock_backtest_class:
 
         mock_backtest_class.return_value.run.return_value = mock_result
@@ -1666,7 +1666,7 @@ def test_run_does_not_modify_original_dataframe():
     mock_result = make_mock_backtest_result()
 
     with patch(
-        "src.walk_forward_engine.BacktestEngine"
+        "src.walk.walk_forward_engine.BacktestEngine"
     ) as mock_backtest_class:
 
         mock_backtest_class.return_value.run.return_value = mock_result
@@ -1690,7 +1690,7 @@ def test_run_window_train_size_is_correct():
     mock_result = make_mock_backtest_result()
 
     with patch(
-        "src.walk_forward_engine.BacktestEngine"
+        "src.walk.walk_forward_engine.BacktestEngine"
     ) as mock_backtest_class:
 
         mock_backtest_class.return_value.run.return_value = mock_result
@@ -1719,7 +1719,7 @@ def test_run_window_test_size_is_correct():
     mock_result = make_mock_backtest_result()
 
     with patch(
-        "src.walk_forward_engine.BacktestEngine"
+        "src.walk.walk_forward_engine.BacktestEngine"
     ) as mock_backtest_class:
 
         mock_backtest_class.return_value.run.return_value = mock_result
@@ -1749,7 +1749,7 @@ def test_run_window_preserves_original_dataframe_index():
     mock_result = make_mock_backtest_result()
 
     with patch(
-        "src.walk_forward_engine.BacktestEngine"
+        "src.walk.walk_forward_engine.BacktestEngine"
     ) as mock_backtest_class:
 
         mock_backtest_class.return_value.run.return_value = mock_result
@@ -1919,7 +1919,7 @@ def test_run_uses_generated_windows_count():
     mock_result = make_mock_backtest_result()
 
     with patch(
-        "src.walk_forward_engine.BacktestEngine"
+        "src.walk.walk_forward_engine.BacktestEngine"
     ) as mock_backtest_class:
 
         mock_backtest_class.return_value.run.return_value = mock_result
@@ -1941,7 +1941,7 @@ def test_run_calls_backtest_once_per_window():
     mock_result = make_mock_backtest_result()
 
     with patch(
-        "src.walk_forward_engine.BacktestEngine"
+        "src.walk.walk_forward_engine.BacktestEngine"
     ) as mock_backtest_class:
 
         mock_backtest_class.return_value.run.return_value = mock_result
@@ -1966,7 +1966,7 @@ def test_run_creates_new_backtest_engine_for_each_window():
     mock_result = make_mock_backtest_result()
 
     with patch(
-        "src.walk_forward_engine.BacktestEngine"
+        "src.walk.walk_forward_engine.BacktestEngine"
     ) as mock_backtest_class:
 
         mock_backtest_class.return_value.run.return_value = mock_result
@@ -1994,7 +1994,7 @@ def test_result_net_profit_is_rounded():
     )
 
     with patch(
-        "src.walk_forward_engine.BacktestEngine"
+        "src.walk.walk_forward_engine.BacktestEngine"
     ) as mock_backtest_class:
 
         mock_backtest_class.return_value.run.return_value = mock_result
@@ -2018,7 +2018,7 @@ def test_result_window_results_alias_is_live():
     mock_result = make_mock_backtest_result()
 
     with patch(
-        "src.walk_forward_engine.BacktestEngine"
+        "src.walk.walk_forward_engine.BacktestEngine"
     ) as mock_backtest_class:
 
         mock_backtest_class.return_value.run.return_value = mock_result
@@ -2040,7 +2040,7 @@ def test_result_total_windows_matches_actual_results():
     mock_result = make_mock_backtest_result()
 
     with patch(
-        "src.walk_forward_engine.BacktestEngine"
+        "src.walk.walk_forward_engine.BacktestEngine"
     ) as mock_backtest_class:
 
         mock_backtest_class.return_value.run.return_value = mock_result
