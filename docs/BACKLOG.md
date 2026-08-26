@@ -18,6 +18,23 @@
 - [ ] Подключить `BinanceRateLimiter` в DRY/LIVE путь ExecutionBridge (hook готов)
 - [ ] Vault (Fernet+Postgres) — решить: подключать или удалить вместе с зависимостями
 
+## P1-data — Комплексный анализ данных (источники для генерации альфа-сигналов)
+
+- [ ] **Фундаментальный анализ**: RSS/News API (CryptoPanic, CoinDesk, CoinTelegraph) + календарь событий (CoinMarketCal); парсинг отчетов (10-Q/20-F для публичных компаний, on-chain treasury для протоколов). Нормализация → эмбеддинги → ежедневный вектор «фундаментальная сила».
+- [ ] **Сентимент-анализ (Social NLP)**: Twitter/X API v2 (filtered по кастомному списку влиятельных аккаунтов/ключевых слов), Reddit API (r/CryptoCurrency, r/Bitcoin, специфические сабреддиты), Telegram-каналы (через TDLib/bot) → очистка спама/ботов → sentiment score per symbol/день → интеграция в Feature Engine как доп. фича `sentiment_score`. LunarCrush API (Galaxy Score, AltRank) — опционально, если лимиты позволяют.
+- [ ] **Технический анализ расширенный**:
+    - Паттерны свечей (candle patterns library: engulfing, doji, hammer, harami, etc.) → binary features
+    - Price Action: структура рынка (HH/HL/LH/LL), order blocks, fair value gaps, breaker blocks
+    - Order Book / L2: микроструктурные фичи (bid-ask spread, order book imbalance, depth slope, microprice)
+    - L2 Data / Order Flow: cumulative delta, CVD, absorption, footprint clusters
+- [ ] **Деривативные метрики (On-chain + Exchange)**:
+    - Open Interest (OI) — агрегатный и по биржам/контрактам
+    - Funding Rate (8h) + предиктор next funding (basis)
+    - Liquidations (биржевые вебхуки/REST) — кластеризация ликвидаций по ценам
+    - Long/Short Ratio (accounts + positions) — top trader positions (Binance/Bybit API)
+    - Open Interest change rate (OI delta) + Funding Rate basis → basis trading signals
+- [ ] Интеграция в Feature Engine: все выше → нормализованные признаки → конкатенация с core-индикаторами → выборка для ML/Strategies
+
 ## P2 — архитектурные долги
 - [ ] Портфельный брокер Long-Run провести через RiskOrchestrator/ExecutionBridge (сейчас собственный леджер с параметрическим риском)
 - [ ] WF-неймспейс: довести facades до полного отказа от корневых импортов в тестах
