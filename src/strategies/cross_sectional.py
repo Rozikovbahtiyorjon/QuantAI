@@ -153,13 +153,19 @@ def backtest(prices: pd.DataFrame, params: CrossSectionParams) -> dict:
                 if realized_ann > 0:
                     scale = min(1.0, float(p.target_ann_vol) / realized_ann)
 
-        # ---- holding period returns ----
-        seg = rets.iloc[t + 1 : t + 1 + p.rebalance_days][picked]
-        w_series = pd.Series(weights)
-        daily_port = seg.fillna(0.0).mul(w_series, axis=1).sum(axis=1)
-        daily_port = daily_port[daily_port != 0.0] if len(daily_port) else daily_port
+        # ---- holding period returns (BUY & HOLD semantics) ----
+        # Static weights fixed at entry; no intra-week micro-rebalancing.
+        # Matches live broker: enter at close(t), exit at close(t+rb).
+        end_i = min(t + p.rebalance_days, n - 1)
+        p_start = prices.iloc[t][picked].astype(float)
+        p_end = prices.iloc[end_i][picked].astype(float)
 
-        gross_period = float((1.0 + daily_port).prod() - 1.0) if len(daily_port) else 0.0
+        gross_period = float(
+            (
+                (p_end / p_start - 1.0)
+                * pd.Series(weights)
+            ).dropna().sum()
+        )
 
         # ---- costs on weight turnover ----
         turned = sum(abs(weights.get(s, 0.0) - prev_weights.get(s, 0.0))
