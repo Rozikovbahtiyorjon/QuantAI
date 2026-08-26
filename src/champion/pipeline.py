@@ -55,7 +55,7 @@ def vector_to_tournament_evaluation(strategy_id: str, m: dict) -> Any:
         total_return=m["net_mean_pct"],
         sharpe_ratio=m["sharpe_median"],
         max_drawdown=abs(m["maxdd_median_pct"]),
-        win_rate=min(max(m["win_rate"], 0.0), 100.0),
+        win_rate=min(max(m["win_rate"], 0.0), 100.0) / 100.0,
         profit_factor=min(m["pf_median"], 99.0),
         walk_forward_score=min(
             max(m["profitable_window_share"], 0.0), 1.0
@@ -115,10 +115,21 @@ class ChampionPipeline:
 
     # -------------------------------------------------- evaluation
 
-    def evaluate_all(self, df, **eval_kwargs) -> dict[str, dict]:
+    def evaluate_all(self, df, evaluate_fn=None, **eval_kwargs) -> dict[str, dict]:
+        """
+        Evaluate every registered candidate.
+
+        evaluate_fn(spec, df, **eval_kwargs) -> {"metrics":..., "windows":...}
+        Defaults to the single-symbol walk-forward evaluate_candidate;
+        portfolio-class strategies inject their own adapter here.
+        """
+        if evaluate_fn is None:
+            from src.champion.evaluation_pipeline import evaluate_candidate
+            evaluate_fn = evaluate_candidate
+
         results = {}
         for sid, spec in self.specs.items():
-            res = evaluate_candidate(spec, df, **eval_kwargs)
+            res = evaluate_fn(spec, df, **eval_kwargs)
             flags = self.rules.evaluate_flags(res["metrics"])
             res["rules_flags"] = flags
             res["rules_passed"] = all(flags.values())
