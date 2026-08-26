@@ -32,8 +32,13 @@ class DrawdownGuard:
         current_equity: float,
     ) -> DrawdownGuardResult:
         if current_equity <= 0:
-            raise ValueError(
-                "current_equity must be greater than zero."
+            # Zero or negative equity - treat as max drawdown (not allowed)
+            return DrawdownGuardResult(
+                peak_equity=0.0,
+                current_equity=0.0,
+                drawdown=0.0,
+                drawdown_percent=100.0,
+                allowed=False,
             )
 
         equity = float(current_equity)
@@ -77,7 +82,7 @@ class DrawdownGuard:
 
         return DrawdownGuardResult(
             peak_equity=round(
-                peak,
+                self._peak_equity,
                 8,
             ),
             current_equity=round(

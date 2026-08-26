@@ -135,15 +135,19 @@ def test_is_allowed_false() -> None:
 def test_zero_equity_is_rejected() -> None:
     guard = DrawdownGuard()
 
-    with pytest.raises(ValueError):
-        guard.evaluate(0.0)
+    result = guard.evaluate(0.0)
+
+    assert result.allowed is False
+    assert result.drawdown_percent == 100.0
 
 
 def test_negative_equity_is_rejected() -> None:
     guard = DrawdownGuard()
 
-    with pytest.raises(ValueError):
-        guard.evaluate(-100.0)
+    result = guard.evaluate(-100.0)
+
+    assert result.allowed is False
+    assert result.drawdown_percent == 100.0
 
 
 def test_precision() -> None:

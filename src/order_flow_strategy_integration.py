@@ -80,8 +80,8 @@ class OrderFlowStrategyIntegration:
         """
 
         if strategy_result is None:
-            raise AttributeError(
-                "strategy_result must provide "
+            raise TypeError(
+                "SignalResult must provide "
                 "signal and trade_approved attributes."
             )
 
@@ -89,8 +89,8 @@ class OrderFlowStrategyIntegration:
             strategy_result,
             "signal",
         ):
-            raise AttributeError(
-                "strategy_result must provide "
+            raise TypeError(
+                "SignalResult must provide "
                 "signal and trade_approved attributes."
             )
 
@@ -98,8 +98,8 @@ class OrderFlowStrategyIntegration:
             strategy_result,
             "trade_approved",
         ):
-            raise AttributeError(
-                "strategy_result must provide "
+            raise TypeError(
+                "SignalResult must provide "
                 "signal and trade_approved attributes."
             )
 

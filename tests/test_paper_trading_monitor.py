@@ -31,6 +31,7 @@ from src.strategy import (
 def make_session() -> PaperTradingSession:
 
     return PaperTradingSession(
+        enable_risk_controls=False,
         initial_balance=1000.0,
         commission=0.0,
         quantity=1.0,

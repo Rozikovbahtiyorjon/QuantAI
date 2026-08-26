@@ -90,6 +90,7 @@ class PaperTradingPipeline:
         initial_balance: float = 1000.0,
         commission: float = 0.0004,
         quantity: float = 1.0,
+        enable_risk_controls: bool = True,
     ) -> None:
 
         if initial_balance <= 0:
@@ -111,6 +112,7 @@ class PaperTradingPipeline:
             initial_balance=initial_balance,
             commission=commission,
             quantity=quantity,
+            enable_risk_controls=enable_risk_controls,
         )
 
         self._result: Optional[

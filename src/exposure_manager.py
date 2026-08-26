@@ -20,6 +20,7 @@ class ExposureManager:
         self,
         max_total_exposure_percent: float = 60.0,
         max_position_exposure_percent: float = 5.0,
+        max_correlation: float = 0.85,
     ) -> None:
         if not 0.0 <= max_total_exposure_percent <= 100.0:
             raise ValueError(
@@ -32,12 +33,18 @@ class ExposureManager:
                 "and no greater than 100."
             )
 
+        if not 0.0 <= max_correlation <= 1.0:
+            raise ValueError(
+                "max_correlation must be between 0.0 and 1.0"
+            )
+
         self.max_total_exposure_percent = float(
             max_total_exposure_percent
         )
         self.max_position_exposure_percent = float(
             max_position_exposure_percent
         )
+        self.max_correlation = float(max_correlation)
 
     def calculate(
         self,

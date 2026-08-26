@@ -53,9 +53,15 @@ from config.settings import (
 )
 
 from src.strategy import (
+    SignalGenerator,
     SignalResult,
     generate_signal_result,
 )
+
+# Factory reference captured at import time; used to detect
+# runtime monkeypatching of the module attribute (tests inject
+# fake strategies through it).
+_ORIGINAL_SIGNAL_FACTORY = generate_signal_result
 
 from src.risk_manager import (
     calculate_position_size,
@@ -84,6 +90,37 @@ class CloseReason(str, Enum):
     BREAK_EVEN = "BREAK_EVEN"
     MANUAL = "MANUAL"
     END_OF_BACKTEST = "END_OF_BACKTEST"
+    LIQUIDATION = "LIQUIDATION"
+    TIME_EXIT = "TIME_EXIT"
+
+
+# ============================================================
+# EXIT POLICY (Phase 3A)
+# ============================================================
+
+
+@dataclass
+class ExitPolicy:
+    """
+    Configurable exit behavior.
+
+    Defaults reproduce the historical engine exactly:
+        trail 2.0 x ATR, break-even after 1.0 x ATR,
+        fixed TP active, no time-based exit.
+    """
+
+    # Trailing stop distance in ATR multiples.
+    trail_atr_mult: float = 2.0
+
+    # Break-even trigger in ATR multiples; None disables BE.
+    break_even_atr: float | None = 1.0
+
+    # Fixed take-profit: False -> TP ignored entirely
+    # (position exits via trailing / time / end-of-run).
+    use_take_profit: bool = True
+
+    # Close a still-open position after N bars; None disables.
+    time_exit_bars: int | None = None
 
 
 # ============================================================
@@ -161,7 +198,10 @@ class TradeEngine:
         executes and manages the resulting position
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        exit_policy: ExitPolicy | None = None,
+    ) -> None:
 
         self.initial_balance = float(
             INITIAL_BALANCE
@@ -180,6 +220,17 @@ class TradeEngine:
         self.closed_positions: List[Position] = []
 
         self.position_counter = 0
+
+        # Exit behavior (Phase 3A): defaults == legacy engine.
+        self.exit_policy = (
+            exit_policy
+            if exit_policy is not None
+            else ExitPolicy()
+        )
+
+        # Equity curve: list of (timestamp, equity) per bar,
+        # recorded during run() for risk metrics (maxDD, Sharpe...).
+        self.equity_curve: List[Any] = []
 
     # ========================================================
     # ENGINE HELPERS
@@ -307,12 +358,20 @@ class TradeEngine:
         # Basic protective-level validation
         # ----------------------------------------------------
 
+        tp_disabled = not self.exit_policy.use_take_profit
+
+        if tp_disabled:
+            take_profit = 0.0
+
         if side == PositionSide.LONG:
 
             if stop_loss >= entry_price:
                 return False
 
-            if take_profit <= entry_price:
+            if (
+                not tp_disabled
+                and take_profit <= entry_price
+            ):
                 return False
 
         else:
@@ -320,7 +379,10 @@ class TradeEngine:
             if stop_loss <= entry_price:
                 return False
 
-            if take_profit >= entry_price:
+            if (
+                not tp_disabled
+                and take_profit >= entry_price
+            ):
                 return False
 
         # ----------------------------------------------------
@@ -438,8 +500,12 @@ class TradeEngine:
             )
 
             take_profit_hit = (
-                high
-                >= position.take_profit
+                self.exit_policy.use_take_profit
+                and position.take_profit > 0
+                and (
+                    high
+                    >= position.take_profit
+                )
             )
 
             # Conservative assumption:
@@ -479,8 +545,12 @@ class TradeEngine:
             )
 
             take_profit_hit = (
-                low
-                <= position.take_profit
+                self.exit_policy.use_take_profit
+                and position.take_profit > 0
+                and (
+                    low
+                    <= position.take_profit
+                )
             )
 
             # Conservative assumption:
@@ -532,6 +602,11 @@ class TradeEngine:
         if position.break_even_activated:
             return False
 
+        be_mult = self.exit_policy.break_even_atr
+
+        if be_mult is None:
+            return False
+
         if atr <= 0:
             return False
 
@@ -543,7 +618,7 @@ class TradeEngine:
 
             trigger = (
                 position.entry_price
-                + atr
+                + atr * float(be_mult)
             )
 
             if (
@@ -569,7 +644,7 @@ class TradeEngine:
 
             trigger = (
                 position.entry_price
-                - atr
+                - atr * float(be_mult)
             )
 
             if (
@@ -612,7 +687,7 @@ class TradeEngine:
             return False
 
         trail_distance = (
-            atr * 2.0
+            atr * float(self.exit_policy.trail_atr_mult)
         )
 
         changed = False
@@ -773,7 +848,107 @@ class TradeEngine:
             atr,
         )
 
+        # ====================================================
+        # 4. TIME EXIT
+        # ====================================================
+
+        max_bars = self.exit_policy.time_exit_bars
+
+        if (
+            max_bars is not None
+            and position.bars_open >= int(max_bars)
+        ):
+
+            self.close_position(
+                position,
+                candle,
+                close,
+                CloseReason.TIME_EXIT,
+            )
+
+            return True
+
         return False
+
+    # ========================================================
+    # PENDING ENTRY EXECUTION (next-bar-open)
+    # ========================================================
+
+    def execute_pending_entry(
+        self,
+        signal: SignalResult,
+        candle: Any,
+        entry_meta: dict | None = None,
+    ) -> bool:
+        """
+        Execute a signal generated on the PREVIOUS bar at THIS bar's open.
+
+        Removes same-bar look-ahead bias: the strategy observes bar i close,
+        execution happens at bar i+1 open.
+
+        SL/TP are shifted by the gap between planned and actual entry so
+        the risk geometry stays identical.
+        """
+
+        if not self.can_open_position():
+            return False
+
+        side = PositionSide(
+            signal.signal
+        )
+
+        raw_entry = float(
+            candle["open"]
+        )
+
+        # Reference entries after slippage, for geometry shift only.
+        slipped_actual = self.apply_slippage(
+            side,
+            raw_entry,
+        )
+
+        slipped_planned = self.apply_slippage(
+            side,
+            float(signal.entry),
+        )
+
+        delta = slipped_actual - slipped_planned
+
+        adjusted = SignalResult(
+            signal=signal.signal,
+
+            entry=raw_entry,
+
+            stop_loss=float(signal.stop_loss) + delta,
+
+            take_profit=float(signal.take_profit) + delta,
+
+            confidence=signal.confidence,
+
+            score=signal.score,
+
+            reasons=list(signal.reasons),
+
+            ai_signal=signal.ai_signal,
+
+            ai_confidence=signal.ai_confidence,
+        )
+
+        opened = self.open_position(
+            candle,
+            adjusted,
+        )
+
+        if opened and entry_meta is not None:
+            entry_meta.update(
+                {
+                    "executed": True,
+                    "entry_price": float(adjusted.entry),
+                    "stop_loss": float(adjusted.stop_loss),
+                }
+            )
+
+        return opened
 
     # ========================================================
     # CLOSE POSITION
@@ -933,15 +1108,27 @@ class TradeEngine:
     def run(
         self,
         df: pd.DataFrame,
+        history_window: int = 300,
+        signal_config: Any = None,
+        warmup_bars: int | None = None,
+        signal_generator: Any = None,
+        entry_callback: Any = None,
     ) -> pd.DataFrame:
         """
         Run historical backtest.
 
-        Strategy signals are evaluated using historical data
-        up to the current candle.
+        Execution model (no same-bar look-ahead):
 
-        Existing positions are updated BEFORE a new signal
-        is generated.
+            1. Signal is generated using data up to bar i CLOSE.
+            2. Entry executes at bar i+1 OPEN (+slippage).
+            3. SL/TP geometry shifts by the entry gap.
+
+        Positions are updated on every bar AFTER pending execution.
+
+        `history_window` caps the lookback slice per signal call:
+        pipeline components only use the last ~100 bars
+        (AIAnalyzer.lookback), so a bounded window removes the
+        O(n^2) full-history reslice without changing results.
         """
 
         if not isinstance(
@@ -954,16 +1141,66 @@ class TradeEngine:
                 "a pandas DataFrame."
             )
 
+        self.equity_curve = []
+
         if df.empty:
 
             return self.to_dataframe()
 
-        # Indicators require historical warm-up.
-        start_index = 250
+        # Indicator warm-up. For prepared datasets (indicators
+        # computed on the full history upstream) pass 0 to keep
+        # the whole slice tradeable.
+        start_index = (
+            250 if warmup_bars is None else max(0, int(warmup_bars))
+        )
 
-        if len(df) <= start_index:
+        if len(df) <= start_index + 1:
 
             return self.to_dataframe()
+
+        # ====================================================
+        # PERSISTENT SIGNAL GENERATOR
+        # ====================================================
+
+        # Created ONCE per backtest. Pipeline components are
+        # stateless between calls (ConfidenceEngine resets on
+        # each generate()), so reuse is safe and removes
+        # per-bar re-instantiation overhead.
+        #
+        # If the module-level factory has been replaced
+        # (tests monkeypatch it), fall back to calling it so
+        # injected strategies keep working.
+        if signal_generator is not None:
+
+            # Research path: externally provided generator
+            # (e.g., BreakoutSignalGenerator).
+            _gen = signal_generator
+
+            def signal_fn(history_df):
+                return _gen.generate(history_df)
+
+        elif generate_signal_result is _ORIGINAL_SIGNAL_FACTORY:
+
+            _gen = SignalGenerator(
+                signal_config
+                if signal_config is not None
+                else None
+            )
+
+            def signal_fn(history_df):
+                return _gen.generate(history_df)
+
+        else:
+
+            signal_fn = generate_signal_result
+
+        window = (
+            int(history_window)
+            if history_window and int(history_window) > 0
+            else len(df)
+        )
+
+        pending_signal: SignalResult | None = None
 
         # ====================================================
         # HISTORICAL LOOP
@@ -974,16 +1211,38 @@ class TradeEngine:
             len(df),
         ):
 
-            history = df.iloc[
-                : i + 1
+            candle = df.iloc[
+                i
             ]
 
-            candle = (
-                history.iloc[-1]
-            )
+            # ------------------------------------------------
+            # 1. EXECUTE PENDING ENTRY AT THIS BAR'S OPEN
+            # ------------------------------------------------
+
+            if pending_signal is not None:
+
+                _meta: dict = {
+                    "signal_index": i,
+                    "side": pending_signal.signal,
+                    "executed": False,
+                }
+
+                self.execute_pending_entry(
+                    pending_signal,
+                    candle,
+                    entry_meta=_meta,
+                )
+
+                if (
+                    entry_callback is not None
+                    and _meta.get("executed")
+                ):
+                    entry_callback(_meta)
+
+                pending_signal = None
 
             # ------------------------------------------------
-            # UPDATE EXISTING POSITIONS
+            # 2. UPDATE EXISTING POSITIONS
             # ------------------------------------------------
 
             for position in (
@@ -996,35 +1255,75 @@ class TradeEngine:
                 )
 
             # ------------------------------------------------
-            # MAXIMUM POSITIONS
+            # EQUITY CURVE (bar close, incl. floating PnL)
             # ------------------------------------------------
 
-            if not self.can_open_position():
+            floating = sum(
+                self._floating_pnl(
+                    position,
+                    float(candle["close"]),
+                )
+                for position in self.get_open_positions()
+            )
+
+            equity_now = self.balance + floating
+
+            self.equity_curve.append(
+                (
+                    candle.get("timestamp"),
+                    round(equity_now, 6),
+                )
+            )
+
+            # ------------------------------------------------
+            # LIQUIDATION STOP: cross-margin account blown
+            # ------------------------------------------------
+
+            if equity_now <= 0:
+
+                for position in self.get_open_positions()[:]:
+
+                    self.close_position(
+                        position,
+                        candle,
+                        float(candle["close"]),
+                        CloseReason.LIQUIDATION,
+                    )
+
+                self.balance = max(self.balance, 0.0)
+                self.equity = self.balance
+                break
+
+            # ------------------------------------------------
+            # STRATEGY (bounded history window)
+            # ------------------------------------------------
+
+            low = max(
+                0,
+                i - window + 1,
+            )
+
+            history = df.iloc[
+                low : i + 1
+            ]
+
+            # Pipeline statistics (z-scores / percentiles over
+            # AIAnalyzer.lookback=100 bars) need a minimal window;
+            # with warmup_bars=0 the first bars cannot signal yet.
+            if len(history) < 100:
 
                 continue
 
-            # ------------------------------------------------
-            # STRATEGY
-            # ------------------------------------------------
-
-            signal = (
-                generate_signal_result(
-                    history
-                )
+            signal = signal_fn(
+                history
             )
 
             if signal.signal == "HOLD":
 
                 continue
 
-            # ------------------------------------------------
-            # OPEN POSITION
-            # ------------------------------------------------
-
-            self.open_position(
-                candle,
-                signal,
-            )
+            # Defer execution to NEXT bar open.
+            pending_signal = signal
 
         # ====================================================
         # CLOSE REMAINING POSITIONS
@@ -1052,6 +1351,29 @@ class TradeEngine:
                 )
 
         return self.to_dataframe()
+
+    # --------------------------------------------------------
+
+    def _floating_pnl(
+        self,
+        position: Position,
+        close_price: float,
+    ) -> float:
+        """
+        Unrealized PnL of an open position at a given price.
+        """
+
+        if position.side == PositionSide.LONG:
+
+            return (
+                close_price
+                - position.entry_price
+            ) * position.quantity
+
+        return (
+            position.entry_price
+            - close_price
+        ) * position.quantity
 
     # ========================================================
     # DATAFRAME EXPORT

@@ -48,20 +48,32 @@ from src.paper_trading_runner import (
 from src import paper_trading_runner as _paper_trading_runner
 
 
-def generate_signal_result(df: pd.DataFrame):
+# ============================================================
+# STRATEGY COMPATIBILITY PROXY
+# ============================================================
+
+def generate_signal_result(
+    df: pd.DataFrame,
+):
     """
     Compatibility proxy for Strategy signal generation.
 
-    The proxy is intentionally kept at module level so existing tests can
-    monkeypatch ``src.paper_trading_session.generate_signal_result``.
+    The proxy is intentionally kept at module level so existing tests
+    can monkeypatch ``src.paper_trading_session.generate_signal_result``.
 
-    The actual call is delegated dynamically to ``paper_trading_runner`` so
-    integrations that monkeypatch
+    The actual call is delegated dynamically to ``paper_trading_runner``
+    so integrations that monkeypatch
     ``src.paper_trading_runner.generate_signal_result`` continue to work.
     """
 
-    return _paper_trading_runner.generate_signal_result(df)
+    return _paper_trading_runner.generate_signal_result(
+        df
+    )
 
+
+# ============================================================
+# SESSION RESULT
+# ============================================================
 
 @dataclass
 class PaperTradingSessionResult:
@@ -84,6 +96,10 @@ class PaperTradingSessionResult:
     closed_positions: int
 
 
+# ============================================================
+# PAPER TRADING SESSION
+# ============================================================
+
 class PaperTradingSession:
     """
     Sequential paper-trading session.
@@ -91,6 +107,11 @@ class PaperTradingSession:
     Market data is consumed through PaperMarketData.
     Strategy signals are generated from the accumulated
     market-data window and passed to PaperTradingRunner.
+
+    The session result derives closed trade count from the
+    PaperTradingEngine trade history so that positions closed
+    manually through ``session.runner.close_position()`` are
+    reflected immediately in the session result.
     """
 
     def __init__(
@@ -98,17 +119,23 @@ class PaperTradingSession:
         initial_balance: float = 1000.0,
         commission: float = 0.0004,
         quantity: float = 1.0,
+        enable_risk_controls: bool = True,
     ) -> None:
 
         self.runner = PaperTradingRunner(
             initial_balance=initial_balance,
             commission=commission,
             quantity=quantity,
+            enable_risk_controls=enable_risk_controls,
         )
 
         self._steps: List[PaperTradingStepResult] = []
 
         self._market_data: PaperMarketData | None = None
+
+    # ========================================================
+    # RUN
+    # ========================================================
 
     def run(
         self,
@@ -117,11 +144,12 @@ class PaperTradingSession:
         """
         Run a complete paper-trading session.
 
-        Market data is consumed sequentially through PaperMarketData.
+        Market data is consumed sequentially through
+        PaperMarketData.
 
-        For every market-data row, the accumulated DataFrame window is
-        passed to Strategy. The resulting SignalResult is processed by
-        PaperTradingRunner.
+        For every market-data row, the accumulated DataFrame
+        window is passed to Strategy. The resulting SignalResult
+        is processed by PaperTradingRunner.
         """
 
         if not isinstance(
@@ -137,7 +165,9 @@ class PaperTradingSession:
                 "DataFrame cannot be empty."
             )
 
-        market_data = PaperMarketData(df)
+        market_data = PaperMarketData(
+            df
+        )
 
         self._market_data = market_data
         self._steps = []
@@ -145,23 +175,41 @@ class PaperTradingSession:
         accumulated_rows: list[pd.Series] = []
 
         for row in market_data:
-            accumulated_rows.append(row)
+
+            accumulated_rows.append(
+                row
+            )
 
             window = pd.DataFrame(
                 accumulated_rows
-            ).reset_index(drop=True)
-
-            signal = generate_signal_result(
-                window
+            ).reset_index(
+                drop=True
             )
+
+            ml_model = self.runner._ml_engine.model if self.runner.enable_ml and self.runner._ml_engine else None
+
+            try:
+                signal = generate_signal_result(
+                    window,
+                    model=ml_model,
+                )
+            except TypeError:
+                # Backward compatibility: mock may not accept model parameter
+                signal = generate_signal_result(window)
 
             step = self.runner.process_signal(
                 signal
             )
 
-            self._steps.append(step)
+            self._steps.append(
+                step
+            )
 
         return self.result
+
+    # ========================================================
+    # RESULT
+    # ========================================================
 
     @property
     def result(
@@ -169,6 +217,13 @@ class PaperTradingSession:
     ) -> PaperTradingSessionResult:
         """
         Return the current session result.
+
+        Opened positions are counted from processed session steps.
+
+        Closed positions are counted from the PaperTradingEngine's
+        trade history. This is intentionally used instead of only
+        counting ``step.position_closed`` because a position may be
+        closed manually after ``run()`` through the runner API.
         """
 
         opened_positions = sum(
@@ -177,14 +232,14 @@ class PaperTradingSession:
             if step.position_opened
         )
 
-        closed_positions = sum(
-            1
-            for step in self._steps
-            if step.position_closed
+        closed_positions = len(
+            self.runner.engine.trade_history
         )
 
         return PaperTradingSessionResult(
-            steps=list(self._steps),
+            steps=list(
+                self._steps
+            ),
             initial_balance=(
                 self.runner.engine.initial_balance
             ),
@@ -205,6 +260,10 @@ class PaperTradingSession:
             ),
         )
 
+    # ========================================================
+    # BALANCE
+    # ========================================================
+
     @property
     def balance(
         self,
@@ -214,6 +273,10 @@ class PaperTradingSession:
         """
 
         return self.runner.balance
+
+    # ========================================================
+    # POSITION STATE
+    # ========================================================
 
     @property
     def has_position(
@@ -225,6 +288,10 @@ class PaperTradingSession:
 
         return self.runner.has_position
 
+    # ========================================================
+    # REALIZED PROFIT
+    # ========================================================
+
     @property
     def realized_profit(
         self,
@@ -235,6 +302,10 @@ class PaperTradingSession:
 
         return self.runner.realized_profit
 
+    # ========================================================
+    # STEPS
+    # ========================================================
+
     @property
     def steps(
         self,
@@ -243,7 +314,13 @@ class PaperTradingSession:
         Return processed steps.
         """
 
-        return list(self._steps)
+        return list(
+            self._steps
+        )
+
+    # ========================================================
+    # MARKET DATA
+    # ========================================================
 
     @property
     def market_data(
@@ -254,6 +331,10 @@ class PaperTradingSession:
         """
 
         return self._market_data
+
+    # ========================================================
+    # RESET
+    # ========================================================
 
     def reset(
         self,
@@ -269,6 +350,10 @@ class PaperTradingSession:
         if self._market_data is not None:
             self._market_data.reset()
 
+
+# ============================================================
+# EXPORTS
+# ============================================================
 
 __all__ = [
     "PaperTradingSessionResult",

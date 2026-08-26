@@ -2,29 +2,39 @@
 __pycache__/
 *.py[cod]
 *.pyo
+.pytest_cache/
 
 # Virtual Environment
 .venv/
+venv/
 
-# VS Code
+# Environment / secrets (CRITICAL: never commit credentials)
+.env
+.env.*
+*.env
+!.env.example
+
+# Data (reproducible via download pipeline, do not commit)
+data/
+!data/.gitkeep
+
+# Models (artifacts, retrainable)
+models/
+
+# Run outputs
+trades*.csv
+output.txt
+
+# VS Code / IDE
 .vscode/
+.idea/
 
 # Logs
 logs/
 *.log
 
-# Data
-data/raw/
-data/temp/
-
-# Models
-models/
-
 # Jupyter
 .ipynb_checkpoints/
-
-# Environment
-.env
 
 # OS
 .DS_Store

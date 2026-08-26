@@ -1,0 +1,15 @@
+# =========================================================
+# QuantAI - Development Dependencies
+# Install: pip install -r requirements.txt -r requirements-dev.txt
+# =========================================================
+
+pytest==9.1.1
+pytest-cov>=6.0
+
+# Lint & type check (used by CI)
+ruff>=0.9
+mypy>=1.14
+
+# Type stubs for mypy on core stack
+types-requests>=2.32
+pandas-stubs>=2.2

@@ -352,7 +352,7 @@ def test_invalid_strategy_result_is_rejected() -> None:
     order_flow = make_order_flow_signal()
 
     with pytest.raises(
-        AttributeError,
+        TypeError,
     ):
         from src.order_flow_strategy_integration import (
             OrderFlowStrategyIntegration,

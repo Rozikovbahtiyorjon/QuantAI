@@ -57,6 +57,9 @@ REQUIRED_COLUMNS = {
 class BacktestResult:
     """
     Final backtest statistics.
+
+    Core fields are backward compatible; risk metrics
+    (MetricsVector) were added in Phase 1.
     """
 
     initial_balance: float
@@ -69,7 +72,21 @@ class BacktestResult:
 
     win_rate: float
 
+    # ---- MetricsVector (Phase 1) ----
+    total_return_pct: float = 0.0
+    max_drawdown_pct: float = 0.0
+    max_drawdown_abs: float = 0.0
+    sharpe: float = 0.0
+    sortino: float = 0.0
+    profit_factor: float = 0.0
+    expectancy: float = 0.0
+    avg_win: float = 0.0
+    avg_loss: float = 0.0
+    gross_profit: float = 0.0
+    gross_loss: float = 0.0
+
     trades: Any = None
+    equity_curve: Any = None
 
 
 # ==========================================================
@@ -622,6 +639,132 @@ class BacktestEngine:
         return trades
 
     # ======================================================
+    # RISK METRICS (MetricsVector)
+    # ======================================================
+
+    @staticmethod
+    def _infer_periods_per_year(
+        timestamps: list,
+    ) -> float:
+        """
+        Infer annualization factor from median bar interval.
+        Falls back to 15m bars (35040/yr) when timestamps
+        are missing or unparsable.
+        """
+
+        try:
+            ts = pd.to_datetime(pd.Series(timestamps))
+            dt = ts.diff().dropna()
+            if len(dt) == 0:
+                return 35040.0
+            seconds = dt.dt.total_seconds().median()
+            if seconds and seconds > 0:
+                return 365.0 * 24.0 * 3600.0 / float(seconds)
+        except Exception:
+            pass
+        return 35040.0
+
+    @classmethod
+    def _compute_risk_metrics(
+        cls,
+        trade_engine: TradeEngine,
+        initial_balance: float,
+    ) -> dict:
+        """
+        Compute the MetricsVector from closed trades and the
+        per-bar equity curve recorded by TradeEngine.
+        """
+
+        import numpy as np
+
+        closed = list(getattr(trade_engine, "closed_positions", []) or [])
+        nets = [float(p.net_profit) for p in closed]
+
+        wins = [n for n in nets if n > 0]
+        losses = [n for n in nets if n < 0]
+
+        gross_profit = sum(wins)
+        gross_loss = abs(sum(losses))
+
+        profit_factor = (
+            gross_profit / gross_loss
+            if gross_loss > 0
+            else (float("inf") if gross_profit > 0 else 0.0)
+        )
+
+        expectancy = (
+            sum(nets) / len(nets) if nets else 0.0
+        )
+
+        avg_win = (
+            gross_profit / len(wins) if wins else 0.0
+        )
+
+        avg_loss = (
+            -gross_loss / len(losses) if losses else 0.0
+        )
+
+        # ---- Equity curve ----
+        curve = list(getattr(trade_engine, "equity_curve", []) or [])
+        equity = [float(v) for _, v in curve]
+        timestamps = [t for t, _ in curve]
+
+        max_dd_pct = 0.0
+        max_dd_abs = 0.0
+        sharpe = 0.0
+        sortino = 0.0
+
+        if len(equity) >= 2:
+            eq = np.asarray(equity, dtype=float)
+
+            # Guard against account blow-up (eq <= 0): clip at tiny positive
+            # so return math stays finite; bankruptcy is reported separately.
+            eq = np.where(eq <= 0, 1e-9, eq)
+
+            # Max drawdown on equity curve
+            peaks = np.maximum.accumulate(eq)
+            dd_abs = eq - peaks
+            with np.errstate(divide="ignore", invalid="ignore"):
+                dd_pct = np.where(peaks > 0, dd_abs / peaks, 0.0)
+            min_i = int(np.argmin(dd_pct))
+            max_dd_pct = float(dd_pct[min_i] * 100.0)
+            max_dd_abs = float(dd_abs[min_i])
+
+            # Per-bar returns
+            rets = np.diff(eq) / eq[:-1]
+            downside = rets[rets < 0]
+
+            ppy = cls._infer_periods_per_year(timestamps)
+
+            mean_r = float(rets.mean())
+            std_r = float(rets.std(ddof=1)) if len(rets) > 1 else 0.0
+
+            if std_r > 0:
+                sharpe = mean_r / std_r * (ppy ** 0.5)
+
+            if len(downside) > 1:
+                dstd = float(downside.std(ddof=1))
+                if dstd > 0:
+                    sortino = mean_r / dstd * (ppy ** 0.5)
+
+        return {
+            "max_drawdown_pct": round(max_dd_pct, 4),
+            "max_drawdown_abs": round(max_dd_abs, 2),
+            "sharpe": round(sharpe, 3),
+            "sortino": round(sortino, 3),
+            "profit_factor": (
+                round(profit_factor, 3)
+                if profit_factor != float("inf")
+                else float("inf")
+            ),
+            "expectancy": round(expectancy, 4),
+            "avg_win": round(avg_win, 4),
+            "avg_loss": round(avg_loss, 4),
+            "gross_profit": round(gross_profit, 2),
+            "gross_loss": round(gross_loss, 2),
+        }
+
+    # ======================================================
     # RUN
     # ======================================================
 
@@ -735,6 +878,23 @@ class BacktestEngine:
         )
 
         # --------------------------------------------------
+        # MetricsVector (risk-adjusted statistics)
+        # --------------------------------------------------
+
+        risk_metrics = self._compute_risk_metrics(
+            self.trade_engine,
+            initial_balance,
+        )
+
+        total_return_pct = (
+            (final_balance - initial_balance)
+            / initial_balance
+            * 100.0
+            if initial_balance
+            else 0.0
+        )
+
+        # --------------------------------------------------
         # Build result
         # --------------------------------------------------
 
@@ -746,7 +906,10 @@ class BacktestEngine:
             winning_trades=winning_trades,
             losing_trades=losing_trades,
             win_rate=win_rate,
+            total_return_pct=round(total_return_pct, 4),
+            equity_curve=list(self.trade_engine.equity_curve),
             trades=trades,
+            **risk_metrics,
         )
 
         self._result = result
@@ -841,6 +1004,45 @@ class BacktestEngine:
         print(
             f"Win Rate        : "
             f"{result.win_rate:.2f}%"
+        )
+
+        print(
+            "-" * 60
+        )
+
+        print(
+            f"Total Return    : "
+            f"{result.total_return_pct:.2f}%"
+        )
+
+        print(
+            f"Max Drawdown    : "
+            f"{result.max_drawdown_pct:.2f}%"
+        )
+
+        print(
+            f"Profit Factor   : "
+            f"{result.profit_factor}"
+        )
+
+        print(
+            f"Sharpe (ann.)   : "
+            f"{result.sharpe}"
+        )
+
+        print(
+            f"Sortino (ann.)  : "
+            f"{result.sortino}"
+        )
+
+        print(
+            f"Expectancy/trade: "
+            f"{result.expectancy}"
+        )
+
+        print(
+            f"Avg Win / Loss  : "
+            f"{result.avg_win} / {result.avg_loss}"
         )
 
         print(

@@ -44,6 +44,8 @@ import pandas as pd
 
 from sklearn.model_selection import train_test_split
 
+from src.validation.purged_kfold import get_purged_cv
+
 from sklearn.metrics import (
     accuracy_score,
     balanced_accuracy_score,
@@ -82,6 +84,13 @@ class MLConfig:
     colsample_bytree: float = 0.90
 
     use_class_weights: bool = True
+
+    # Purged K-Fold parameters
+    cv_type: str = "purged"          # "purged" or "combinatorial"
+    n_splits: int = 5
+    embargo_pct: float = 0.01        # Gap between train/test (1% of samples)
+    purge_pct: float = 0.0           # Remove overlapping labels
+    n_test_folds: int = 2            # For combinatorial CV
 
 
 # ====================================================
@@ -380,39 +389,34 @@ class MLEngine:
         )
 
         # ------------------------------------------------
-        # STRATIFIED SPLIT
+        # PURGED K-FOLD SPLIT (No Look-Ahead Bias)
         # ------------------------------------------------
 
-        (
-            X_train,
-            X_test,
-            y_train,
-            y_test,
-        ) = train_test_split(
-
-            X,
-
-            y_xgb,
-
-            test_size=(
-                self.config.test_size
-            ),
-
-            random_state=(
-                self.config.random_state
-            ),
-
-            shuffle=True,
-
-            stratify=y_xgb,
-
+        cv = get_purged_cv(
+            cv_type=self.config.cv_type,
+            n_splits=self.config.n_splits,
+            embargo_pct=self.config.embargo_pct,
+            purge_pct=self.config.purge_pct,
+            n_test_folds=self.config.n_test_folds,
         )
+
+        # Return CV object for proper cross-validation
+        # Also return a single split for backward compatibility
+        train_idx, test_idx = next(cv.split(X, y_xgb))
+
+        X_train = X.iloc[train_idx]
+        X_test = X.iloc[test_idx]
+        y_train = y_xgb.iloc[train_idx]
+        y_test = y_xgb.iloc[test_idx]
 
         return (
             X_train,
             X_test,
             y_train,
             y_test,
+            cv,
+            X,
+            y_xgb,
         )
 
     # ====================================================
@@ -488,6 +492,9 @@ class MLEngine:
             X_test,
             y_train,
             y_test,
+            cv,
+            X_full,
+            y_full,
         ) = self.prepare_dataset(
             dataset
         )
@@ -499,7 +506,7 @@ class MLEngine:
         )
 
         print(
-            "TRAINING XGBOOST v2.0"
+            "TRAINING XGBOOST v2.0 (PurgedKFold CV)"
         )
 
         print(
@@ -521,10 +528,15 @@ class MLEngine:
             f"{len(self.feature_names)}"
         )
 
+        print(
+            f"CV Folds      : "
+            f"{self.config.n_splits}"
+        )
+
         print()
 
         # ------------------------------------------------
-        # TRAIN DISTRIBUTION
+        # TRAIN DISTRIBUTION (first fold)
         # ------------------------------------------------
 
         train_counts = (
@@ -534,7 +546,7 @@ class MLEngine:
         )
 
         print(
-            "TRAIN CLASS DISTRIBUTION"
+            "TRAIN CLASS DISTRIBUTION (Fold 1)"
         )
 
         print(
@@ -559,222 +571,113 @@ class MLEngine:
         print()
 
         # ------------------------------------------------
-        # SAMPLE WEIGHTS
+        # CROSS-VALIDATION
         # ------------------------------------------------
 
-        sample_weight = None
+        print("Running PurgedKFold cross-validation...")
 
-        if self.config.use_class_weights:
+        all_predictions = []
+        all_y_true = []
+        all_probabilities = []
 
-            self.calculate_class_weights(
-                y_train
-            )
+        fold_metrics = []
 
-            sample_weight = (
-                compute_sample_weight(
+        for fold_idx, (train_idx, test_idx) in enumerate(cv.split(X_full, y_full)):
+            X_tr = X_full.iloc[train_idx]
+            X_te = X_full.iloc[test_idx]
+            y_tr = y_full.iloc[train_idx]
+            y_te = y_full.iloc[test_idx]
+
+            sample_weight = None
+            if self.config.use_class_weights:
+                sample_weight = compute_sample_weight(
                     class_weight="balanced",
-                    y=y_train,
+                    y=y_tr,
                 )
+
+            fold_model = self._create_model()
+            fold_model.fit(X_tr, y_tr, sample_weight=sample_weight)
+
+            pred_xgb = fold_model.predict(X_te)
+            prob = fold_model.predict_proba(X_te)
+
+            # Convert back to QuantAI labels
+            pred = (
+                pd.Series(pred_xgb)
+                .replace({0: -1, 1: 0, 2: 1})
+                .to_numpy()
             )
+            y_true = (
+                pd.Series(y_te)
+                .replace({0: -1, 1: 0, 2: 1})
+                .to_numpy()
+            )
+
+            all_predictions.extend(pred)
+            all_y_true.extend(y_true)
+            all_probabilities.extend(prob)
+
+            # Per-fold metrics
+            fold_acc = accuracy_score(y_true, pred)
+            fold_bal_acc = balanced_accuracy_score(y_true, pred)
+            fold_f1 = f1_score(y_true, pred, average="macro", zero_division=0)
+            fold_metrics.append((fold_acc, fold_bal_acc, fold_f1))
 
             print(
-                "CLASS WEIGHTS"
+                f"  Fold {fold_idx + 1}: Acc={fold_acc:.4f}, BalAcc={fold_bal_acc:.4f}, F1={fold_f1:.4f}"
             )
-
-            print(
-                "-" * 60
-            )
-
-            print(
-                f"SELL : "
-                f"{self.class_weights[0]:.4f}"
-            )
-
-            print(
-                f"HOLD : "
-                f"{self.class_weights[1]:.4f}"
-            )
-
-            print(
-                f"BUY  : "
-                f"{self.class_weights[2]:.4f}"
-            )
-
-            print()
-
-        # ------------------------------------------------
-        # NEW MODEL
-        # ------------------------------------------------
-
-        self.model = (
-            self._create_model()
-        )
-
-        # ------------------------------------------------
-        # FIT
-        # ------------------------------------------------
-
-        print(
-            "Fitting XGBoost..."
-        )
-
-        self.model.fit(
-
-            X_train,
-
-            y_train,
-
-            sample_weight=(
-                sample_weight
-            ),
-
-        )
-
-        print(
-            "Training completed."
-        )
 
         print()
 
         # ------------------------------------------------
-        # PREDICTION
+        # AGGREGATE CV METRICS
         # ------------------------------------------------
 
-        prediction_xgb = (
-            self.model.predict(
-                X_test
-            )
-        )
+        all_predictions = np.array(all_predictions)
+        all_y_true = np.array(all_y_true)
+        all_probabilities = np.array(all_probabilities)
 
-        # ------------------------------------------------
-        # PROBABILITIES
-        # ------------------------------------------------
-
-        probabilities = (
-            self.model.predict_proba(
-                X_test
-            )
-        )
-
-        self.last_probabilities = (
-            probabilities
-        )
-
-        # ------------------------------------------------
-        # XGBoost → QuantAI
-        # ------------------------------------------------
-
-        prediction = (
-            pd.Series(
-                prediction_xgb
-            )
-            .replace(
-                {
-                    0: -1,
-                    1: 0,
-                    2: 1,
-                }
-            )
-            .to_numpy()
-        )
-
-        y_test_original = (
-            pd.Series(
-                y_test
-            )
-            .replace(
-                {
-                    0: -1,
-                    1: 0,
-                    2: 1,
-                }
-            )
-            .to_numpy()
-        )
-
-        # =================================================
-        # METRICS
-        # =================================================
-
-        accuracy = accuracy_score(
-            y_test_original,
-            prediction,
-        )
-
-        balanced_accuracy = (
-            balanced_accuracy_score(
-                y_test_original,
-                prediction,
-            )
-        )
-
-        precision = precision_score(
-            y_test_original,
-            prediction,
-            average="macro",
-            zero_division=0,
-        )
-
-        recall = recall_score(
-            y_test_original,
-            prediction,
-            average="macro",
-            zero_division=0,
-        )
-
-        f1 = f1_score(
-            y_test_original,
-            prediction,
-            average="macro",
-            zero_division=0,
-        )
+        accuracy = accuracy_score(all_y_true, all_predictions)
+        balanced_accuracy = balanced_accuracy_score(all_y_true, all_predictions)
+        precision = precision_score(all_y_true, all_predictions, average="macro", zero_division=0)
+        recall = recall_score(all_y_true, all_predictions, average="macro", zero_division=0)
+        f1 = f1_score(all_y_true, all_predictions, average="macro", zero_division=0)
 
         matrix = confusion_matrix(
-
-            y_test_original,
-
-            prediction,
-
-            labels=[
-                -1,
-                0,
-                1,
-            ],
-
+            all_y_true,
+            all_predictions,
+            labels=[-1, 0, 1],
         )
 
-        # ------------------------------------------------
-        # TEST DISTRIBUTION
-        # ------------------------------------------------
-
         class_distribution = {
-
-            -1: int(
-                (
-                    y_test_original
-                    == -1
-                ).sum()
-            ),
-
-            0: int(
-                (
-                    y_test_original
-                    == 0
-                ).sum()
-            ),
-
-            1: int(
-                (
-                    y_test_original
-                    == 1
-                ).sum()
-            ),
-
+            -1: int((all_y_true == -1).sum()),
+            0: int((all_y_true == 0).sum()),
+            1: int((all_y_true == 1).sum()),
         }
 
-        # =================================================
+        # ------------------------------------------------
+        # FINAL MODEL: Train on full dataset
+        # ------------------------------------------------
+
+        print("Training final model on full dataset...")
+
+        sample_weight = None
+        if self.config.use_class_weights:
+            self.calculate_class_weights(y_full)
+            sample_weight = compute_sample_weight(
+                class_weight="balanced",
+                y=y_full,
+            )
+
+        self.model = self._create_model()
+        self.model.fit(X_full, y_full, sample_weight=sample_weight)
+
+        print("Final model training completed.")
+        print()
+
+        # ------------------------------------------------
         # RESULT
-        # =================================================
+        # ------------------------------------------------
 
         result = TrainingResult(
 

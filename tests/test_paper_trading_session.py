@@ -21,6 +21,7 @@ def create_market_data() -> pd.DataFrame:
 
 def test_initial_state() -> None:
     session = PaperTradingSession(
+        enable_risk_controls=False,
         initial_balance=1000.0,
         commission=0.0,
         quantity=1.0,
@@ -50,6 +51,7 @@ def test_run_processes_all_market_rows(
     )
 
     session = PaperTradingSession(
+        enable_risk_controls=False,
         initial_balance=1000.0,
         commission=0.0,
         quantity=1.0,
@@ -90,6 +92,7 @@ def test_session_uses_market_data_sequentially(
     )
 
     session = PaperTradingSession(
+        enable_risk_controls=False,
         initial_balance=1000.0,
         commission=0.0,
         quantity=1.0,
@@ -119,6 +122,7 @@ def test_buy_signal_opens_position(
     )
 
     session = PaperTradingSession(
+        enable_risk_controls=False,
         initial_balance=1000.0,
         commission=0.0,
         quantity=1.0,
@@ -140,6 +144,7 @@ def test_buy_signal_opens_position(
 
 def test_result_property() -> None:
     session = PaperTradingSession(
+        enable_risk_controls=False,
         initial_balance=1000.0,
         commission=0.0,
         quantity=1.0,
@@ -172,6 +177,7 @@ def test_steps_returns_copy(
     )
 
     session = PaperTradingSession(
+        enable_risk_controls=False,
         initial_balance=1000.0,
         commission=0.0,
         quantity=1.0,
@@ -204,6 +210,7 @@ def test_reset(
     )
 
     session = PaperTradingSession(
+        enable_risk_controls=False,
         initial_balance=1000.0,
         commission=0.0,
         quantity=1.0,
@@ -231,14 +238,16 @@ def test_reset(
 
 
 def test_invalid_dataframe_type() -> None:
-    session = PaperTradingSession()
+    session = PaperTradingSession(
+        enable_risk_controls=False,)
 
     with pytest.raises(TypeError):
         session.run([1, 2, 3])
 
 
 def test_empty_dataframe() -> None:
-    session = PaperTradingSession()
+    session = PaperTradingSession(
+        enable_risk_controls=False,)
 
     with pytest.raises(ValueError):
         session.run(

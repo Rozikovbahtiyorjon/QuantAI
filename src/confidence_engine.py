@@ -223,6 +223,30 @@ class ConfidenceEngine:
         )
 
     # ====================================================
+    # GET CONTINUOUS PROBABILITY (0.0 - 1.0)
+    # ====================================================
+
+    def get_continuous_probability(self, score: float) -> float:
+        """
+        Returns continuous probability in [0.0, 1.0] range.
+        
+        Uses sigmoid function centered at 0:
+        - score = 0.0  -> 0.5 (neutral)
+        - score > 0    -> > 0.5 (bullish bias)
+        - score < 0    -> < 0.5 (bearish bias)
+        
+        The steepness parameter controls sensitivity.
+        """
+        import math
+        
+        steepness = 1.5  # Configurable sensitivity
+        
+        # Sigmoid centered at 0
+        probability = 1.0 / (1.0 + math.exp(-score * steepness))
+        
+        return round(probability, 4)
+
+    # ====================================================
     # DECIDE
     # ====================================================
 
@@ -368,11 +392,101 @@ class ConfidenceEngine:
 
 
 # ====================================================
-# MODULE EXPORT
+# WEIGHTED GATE
 # ====================================================
 
-__all__ = [
-    "ScoreComponent",
-    "ConfidenceResult",
-    "ConfidenceEngine",
-]
+@dataclass
+class WeightedGateConfig:
+    """Configuration for Weighted Gate."""
+    
+    threshold: float = 0.75  # Minimum probability to take action
+    min_confidence: float = 60.0  # Minimum confidence % to consider
+    long_threshold: float = 0.5  # Probability threshold for LONG
+    short_threshold: float = 0.5  # Probability threshold for SHORT
+
+
+@dataclass
+class WeightedGateResult:
+    """Result of Weighted Gate evaluation."""
+    
+    action: str  # "LONG", "SHORT", "HOLD"
+    probability: float
+    confidence: float
+    approved: bool
+    reason: str
+
+
+class WeightedGate:
+    """
+    Weighted Gate for probabilistic signal filtering.
+    
+    Replaces binary HOLD/BUY/SELL with continuous probability.
+    Action is taken only when probability exceeds threshold.
+    
+    Logic:
+    - probability > long_threshold  -> LONG (if approved)
+    - probability < (1 - short_threshold) -> SHORT (if approved)
+    - otherwise -> HOLD
+    """
+    
+    def __init__(self, config: WeightedGateConfig | None = None):
+        self.config = config or WeightedGateConfig()
+    
+    def evaluate(
+        self,
+        probability: float,
+        confidence: float,
+        ai_signal: str = "HOLD",
+    ) -> WeightedGateResult:
+        """
+        Evaluate continuous probability through weighted gate.
+        
+        Args:
+            probability: Continuous probability from AI (0.0-1.0)
+            confidence: Confidence percentage (0-100)
+            ai_signal: Original AI directional signal
+        """
+        # Check minimum confidence
+        if confidence < self.config.min_confidence:
+            return WeightedGateResult(
+                action="HOLD",
+                probability=probability,
+                confidence=confidence,
+                approved=False,
+                reason=f"Confidence {confidence:.1f}% below minimum {self.config.min_confidence:.1f}%",
+            )
+        
+        # Determine action based on probability thresholds
+        long_thresh = self.config.long_threshold
+        short_thresh = 1.0 - self.config.short_threshold
+        
+        if probability > long_thresh:
+            action = "BUY"
+            approved = probability >= self.config.threshold
+            reason = f"Probability {probability:.2%} > LONG threshold {long_thresh:.2%}"
+        elif probability < short_thresh:
+            action = "SELL"
+            approved = probability <= (1.0 - self.config.threshold)
+            reason = f"Probability {probability:.2%} < SHORT threshold {short_thresh:.2%}"
+        else:
+            action = "HOLD"
+            approved = False
+            reason = f"Probability {probability:.2%} in neutral zone [{short_thresh:.2%}, {long_thresh:.2%}]"
+        
+        # If not approved, convert to HOLD
+        if not approved:
+            action = "HOLD"
+            reason = f"Below approval threshold {self.config.threshold:.2%}: {reason}"
+        
+        return WeightedGateResult(
+            action=action,
+            probability=probability,
+            confidence=confidence,
+            approved=approved,
+            reason=reason,
+        )
+
+
+# ====================================================
+# MODULE EXPORT
+# ====================================================

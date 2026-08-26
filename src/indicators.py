@@ -1,13 +1,11 @@
 """
-=========================================================
-QuantAI Professional v3.1
-Institutional Trading Engine
+=======================================================
+QuantAI Professional v3.2
+Indicators Module - Full Set with Core 4 Focus
 
-Indicators Module
-
-Author : OpenAI + Bahtiyorjon
-Version: 3.1
-=========================================================
+All indicators available for ML feature engineering.
+Strategy uses only Core 4: EMA, RSI, ATR, Volume Ratio
+=======================================================
 """
 
 from __future__ import annotations
@@ -191,7 +189,8 @@ def true_range(
 
     return tr
 
-    # ==========================================================
+
+# ==========================================================
 # AVERAGE TRUE RANGE
 # ==========================================================
 
@@ -388,7 +387,8 @@ def vwap(
         cumulative_volume
     )
 
-    # ==========================================================
+
+# ==========================================================
 # ON BALANCE VOLUME
 # ==========================================================
 
@@ -523,7 +523,8 @@ def supertrend(
         trend.fillna(1),
     )
 
-    # ==========================================================
+
+# ==========================================================
 # TREND SCORE
 # ==========================================================
 
@@ -554,7 +555,6 @@ def trend_score(
     )
 
     # RSI
-
     score += np.where(
         df["rsi"] > 60,
         0.5,
@@ -566,7 +566,6 @@ def trend_score(
     )
 
     # MACD
-
     score += np.where(
         df["macd"] > df["macd_signal"],
         1.0,
@@ -574,7 +573,6 @@ def trend_score(
     )
 
     # ADX
-
     score += np.where(
         df["adx"] > ADX_MIN,
         0.5,
@@ -582,7 +580,6 @@ def trend_score(
     )
 
     # SuperTrend
-
     score += np.where(
         df["trend"] == 1,
         1.0,
@@ -604,17 +601,11 @@ def volume_filter(
     """
 
     return (
-
         df["volume"]
-
         >
-
         df["volume_sma20"]
-
         *
-
         VOLUME_FILTER
-
     ).fillna(False)
 
 
@@ -630,26 +621,18 @@ def volatility_filter(
     """
 
     atr_mean = (
-
         df["atr"]
-
         .rolling(
             window=20,
             min_periods=20,
         )
-
         .mean()
-
     )
 
     return (
-
         df["atr"]
-
         >
-
         atr_mean
-
     ).fillna(False)
 
 
@@ -666,74 +649,62 @@ def breakout_filter(
     """
 
     highest = (
-
         df["high"]
-
         .rolling(
             window=period,
             min_periods=period,
         )
-
         .max()
-
     )
 
     lowest = (
-
         df["low"]
-
         .rolling(
             window=period,
             min_periods=period,
         )
-
         .min()
-
     )
 
     breakout_up = (
-
         df["close"]
-
         >
-
         highest.shift(1)
-
     ).fillna(False)
 
     breakout_down = (
-
         df["close"]
-
         <
-
         lowest.shift(1)
-
     ).fillna(False)
 
     return (
-
         breakout_up,
-
         breakout_down,
-
     )
 
-    # ==========================================================
-# BUILD ALL INDICATORS
+
+# ==========================================================
+# BUILD ALL INDICATORS (for ML feature engineering)
 # ==========================================================
 
 def add_indicators(
     df: pd.DataFrame,
+    core_only: bool = False,
 ) -> pd.DataFrame:
     """
-    Calculate every indicator used by QuantAI.
+    Calculate indicators used by QuantAI.
+    
+    Args:
+        df: OHLCV DataFrame
+        core_only: If True, compute only Core 4 (EMA, RSI, ATR, Volume Ratio).
+                   If False, compute all indicators for ML feature engineering.
     """
 
     df = df.copy()
 
     # ======================================================
-    # EMA
+    # CORE 4: EMA, RSI, ATR, Volume
     # ======================================================
 
     df["ema_fast"] = ema(
@@ -751,19 +722,34 @@ def add_indicators(
         EMA_TREND,
     )
 
-    # ======================================================
-    # RSI
-    # ======================================================
-
     df["rsi"] = rsi(
         df["close"],
         RSI_PERIOD,
     )
 
+    df["atr"] = atr(
+        df,
+        ATR_PERIOD,
+    )
+
+    df["volume_sma20"] = volume_sma(
+        df["volume"],
+        VOLUME_MA,
+    )
+
+    df["volume_sma"] = df["volume_sma20"]  # alias for feature_engine
+
+    df["volume_ratio"] = df["volume"] / df["volume_sma20"].replace(0, np.nan)
+    df["volume_ratio"] = df["volume_ratio"].fillna(1.0)
+
+    if core_only:
+        return _cleanup_dataframe(df)
+
     # ======================================================
-    # MACD
+    # EXTENDED INDICATORS (for ML)
     # ======================================================
 
+    # MACD
     (
         df["macd"],
         df["macd_signal"],
@@ -772,19 +758,7 @@ def add_indicators(
         df["close"],
     )
 
-    # ======================================================
-    # ATR
-    # ======================================================
-
-    df["atr"] = atr(
-        df,
-        ATR_PERIOD,
-    )
-
-    # ======================================================
     # ADX
-    # ======================================================
-
     (
         df["plus_di"],
         df["minus_di"],
@@ -794,10 +768,7 @@ def add_indicators(
         ADX_PERIOD,
     )
 
-    # ======================================================
     # BOLLINGER
-    # ======================================================
-
     (
         df["bb_upper"],
         df["bb_middle"],
@@ -808,16 +779,10 @@ def add_indicators(
         BB_STD,
     )
 
-    # ======================================================
     # VWAP
-    # ======================================================
-
     df["vwap"] = vwap(df)
 
-    # ======================================================
     # OBV
-    # ======================================================
-
     df["obv"] = obv(df)
 
     df["obv_ema"] = (
@@ -829,19 +794,7 @@ def add_indicators(
         .mean()
     )
 
-    # ======================================================
-    # VOLUME
-    # ======================================================
-
-    df["volume_sma20"] = volume_sma(
-        df["volume"],
-        VOLUME_MA,
-    )
-
-    # ======================================================
     # SUPERTREND
-    # ======================================================
-
     (
         df["supertrend"],
         df["trend"],
@@ -851,29 +804,22 @@ def add_indicators(
         SUPERTREND_MULTIPLIER,
     )
 
-        # ======================================================
     # TREND SCORE
-    # ======================================================
-
     df["trend_score"] = trend_score(df)
 
-    # ======================================================
     # FILTERS
-    # ======================================================
-
     df["volume_filter"] = volume_filter(df)
-
     df["volatility_filter"] = volatility_filter(df)
-
     (
         df["breakout_up"],
         df["breakout_down"],
     ) = breakout_filter(df)
 
-    # ======================================================
-    # CLEANUP
-    # ======================================================
+    return _cleanup_dataframe(df)
 
+
+def _cleanup_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """Clean up NaN/inf values in dataframe."""
     numeric_columns = df.select_dtypes(
         include=["number"],
     ).columns
@@ -907,6 +853,26 @@ def add_indicators(
 
 
 # ==========================================================
+# CORE 4 INDICATORS ONLY (for strategy) - DEPRECATED
+# Use add_indicators(df, core_only=True) instead
+# ==========================================================
+
+def add_core_indicators(
+    df: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Calculate only the 4 core indicators:
+    1. EMA (fast, slow, trend)
+    2. RSI
+    3. ATR
+    4. Volume Ratio (volume / volume_sma)
+    
+    Deprecated: use add_indicators(df, core_only=True) instead.
+    """
+    return add_indicators(df, core_only=True)
+
+
+# ==========================================================
 # EXPORTS
 # ==========================================================
 
@@ -928,4 +894,5 @@ __all__ = [
     "volatility_filter",
     "breakout_filter",
     "add_indicators",
+    "add_core_indicators",
 ]

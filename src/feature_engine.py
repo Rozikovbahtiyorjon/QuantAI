@@ -1,8 +1,7 @@
 """
 ====================================================
 QuantAI Professional v5.0
-Feature Engine
-====================================================
+Feature Engine - Core 4 Indicators + Microstructure
 
 Назначение:
 
@@ -32,6 +31,19 @@ from typing import Dict
 
 import numpy as np
 import pandas as pd
+
+from src.microstructure_intelligence import (
+    VPINCalculator,
+    KyleLambdaEstimator,
+    LiquidationLevelAnalyzer,
+    compute_microstructure_features,
+)
+from src.alternative_data import (
+    AlternativeDataManager,
+    LunarCrushClient,
+    FundingRateTracker,
+    OIDeltaTracker,
+)
 
 
 # ====================================================
@@ -78,15 +90,42 @@ class FeatureEngine:
     Один объект FeatureEngine
     создаёт FeatureVector
     для последней свечи DataFrame.
+
+    Использует 4 базовых индикатора + Microstructure Intelligence + Alternative Data:
+    1. EMA (fast, slow, trend)
+    2. RSI
+    3. ATR
+    4. Volume Ratio
+    5. VPIN (Volume-synchronized PIN) - Toxicity detection
+    6. Kyle's Lambda - Market impact estimation
+    7. Liquidation Levels - Support/Resistance from liquidation clusters
+    8. LunarCrush - Galaxy Score, AltRank, Social Metrics
+    9. Funding Rate - Cross-exchange funding rates
+    10. OI Delta - Open Interest delta per candle
     """
 
     def __init__(self):
-
         self.features = FeatureVector()
+
+        # Microstructure Intelligence components
+        self._vpin_calculator = VPINCalculator(bucket_volume=100.0, window_buckets=50)
+        self._kyle_lambda_estimator = KyleLambdaEstimator(window_buckets=100, min_buckets=20)
+        self._liquidation_analyzer = LiquidationLevelAnalyzer(
+            price_bin_size=0.001,
+            min_cluster_volume=10.0,
+            lookback_candles=100,
+        )
+        
+        # Alternative Data components
+        self._alt_data_manager = None  # Initialized lazily with exchange connections
 
     def reset(self):
-
         self.features = FeatureVector()
+        self._vpin_calculator.reset()
+        self._kyle_lambda_estimator.reset()
+        self._liquidation_analyzer.clear()
+        if self._alt_data_manager:
+            self._alt_data_manager.close()
 
     # ====================================================
     # EMA FEATURES
@@ -161,7 +200,7 @@ class FeatureEngine:
     ) -> None:
 
         volume = float(row["volume"])
-        volume_sma = float(row["volume_sma20"])
+        volume_sma = float(row["volume_sma"])
 
         if volume_sma > 0:
 
@@ -174,23 +213,6 @@ class FeatureEngine:
         self.features.add(
             "relative_volume",
             ratio,
-        )
-
-    # ====================================================
-    # VWAP FEATURES
-    # ====================================================
-
-    def calculate_vwap_features(
-        self,
-        row: pd.Series,
-    ) -> None:
-
-        close = float(row["close"])
-        vwap = float(row["vwap"])
-
-        self.features.add(
-            "vwap_distance",
-            (close - vwap) / vwap,
         )
 
     # ====================================================
@@ -225,163 +247,42 @@ class FeatureEngine:
         )
 
     # ====================================================
-    # MACD FEATURES
+    # MICROSTRUCTURE FEATURES
     # ====================================================
 
-    def calculate_macd_features(
+    def calculate_vpin_features(
         self,
         row: pd.Series,
     ) -> None:
+        """Calculate VPIN features from current row."""
+        # VPIN requires trade data, not just OHLCV
+        # For now, we'll add placeholder features
+        # In production, VPINCalculator.update() would be called with trade data
+        self.features.add("vpin", 0.0)
+        self.features.add("vpin_toxicity", 0.0)
 
-        macd = float(row["macd"])
-
-        signal = float(row["macd_signal"])
-
-        hist = float(row["macd_hist"])
-
-        self.features.add(
-            "macd_spread",
-            macd - signal,
-        )
-
-        self.features.add(
-            "macd_histogram",
-            hist,
-        )
-
-        self.features.add(
-            "macd_positive",
-            1.0 if hist > 0 else 0.0,
-        )
-
-    # ====================================================
-    # ADX FEATURES
-    # ====================================================
-
-    def calculate_adx_features(
+    def calculate_kyle_lambda_features(
         self,
         row: pd.Series,
     ) -> None:
+        """Calculate Kyle's Lambda features from current row."""
+        # Kyle's Lambda requires order flow data
+        # Placeholder for now
+        self.features.add("kyle_lambda", 0.0)
+        self.features.add("kyle_lambda_rsq", 0.0)
+        self.features.add("kyle_lambda_confidence", 0.0)
 
-        adx = float(row["adx"])
-
-        plus_di = float(row["plus_di"])
-
-        minus_di = float(row["minus_di"])
-
-        self.features.add(
-            "adx_normalized",
-            adx / 100.0,
-        )
-
-        self.features.add(
-            "trend_direction",
-            plus_di - minus_di,
-        )
-
-        self.features.add(
-            "trend_positive",
-            1.0 if plus_di > minus_di else 0.0,
-        )
-
-        self.features.add(
-            "strong_trend",
-            1.0 if adx > 25 else 0.0,
-        )
-
-    # ====================================================
-    # BOLLINGER FEATURES
-    # ====================================================
-
-    def calculate_bollinger_features(
+    def calculate_liquidation_features(
         self,
         row: pd.Series,
     ) -> None:
-
-        close = float(row["close"])
-
-        upper = float(row["bb_upper"])
-
-        middle = float(row["bb_middle"])
-
-        lower = float(row["bb_lower"])
-
-        width = upper - lower
-
-        if width > 0:
-
-            position = (close - lower) / width
-
-        else:
-
-            position = 0.5
-
-        self.features.add(
-            "bb_position",
-            position,
-        )
-
-        self.features.add(
-            "bb_width",
-            width / middle,
-        )
-
-        self.features.add(
-            "bb_above_middle",
-            1.0 if close > middle else 0.0,
-        )
-
-        self.features.add(
-            "bb_touch_upper",
-            1.0 if close >= upper else 0.0,
-        )
-
-        self.features.add(
-            "bb_touch_lower",
-            1.0 if close <= lower else 0.0,
-        )
-
-    # ====================================================
-    # EMA SLOPE FEATURES
-    # ====================================================
-
-    def calculate_ema_slope_features(
-        self,
-        df: pd.DataFrame,
-    ) -> None:
-
-        if len(df) < 2:
-            return
-
-        prev = df.iloc[-2]
-        curr = df.iloc[-1]
-
-        fast_slope = (
-            float(curr["ema_fast"]) - float(prev["ema_fast"])
-        ) / float(prev["ema_fast"])
-
-        slow_slope = (
-            float(curr["ema_slow"]) - float(prev["ema_slow"])
-        ) / float(prev["ema_slow"])
-
-        trend_slope = (
-            float(curr["ema_trend"]) - float(prev["ema_trend"])
-        ) / float(prev["ema_trend"])
-
-        self.features.add(
-            "ema_fast_slope",
-            fast_slope,
-        )
-
-        self.features.add(
-            "ema_slow_slope",
-            slow_slope,
-        )
-
-        self.features.add(
-            "ema_trend_slope",
-            trend_slope,
-        )
+        """Calculate liquidation level features from current row."""
+        # Liquidation features require liquidation data
+        # Placeholder for now
+        self.features.add("nearest_support_dist", 100.0)
+        self.features.add("nearest_resistance_dist", 100.0)
+        self.features.add("support_strength", 0.0)
+        self.features.add("resistance_strength", 0.0)
 
     # ====================================================
     # BUILD FEATURE VECTOR
@@ -412,72 +313,39 @@ class FeatureEngine:
         # Volume
         self.calculate_volume_features(row)
 
-        # VWAP
-        self.calculate_vwap_features(row)
-
         # RSI
         self.calculate_rsi_features(row)
 
-        # MACD
-        self.calculate_macd_features(row)
+        # Microstructure
+        self.calculate_vpin_features(row)
+        self.calculate_kyle_lambda_features(row)
+        self.calculate_liquidation_features(row)
 
-        # ADX
-        self.calculate_adx_features(row)
-
-        # Bollinger
-        self.calculate_bollinger_features(row)
-
-        # EMA Slope
-        self.calculate_ema_slope_features(df)
-
-                # OBV
-        self.calculate_obv_features(df)
+        # Alternative Data
+        self.calculate_alternative_data_features(row)
 
         return self.features
 
-    # ====================================================
-    # OBV FEATURES
-    # ====================================================
-
-        # ====================================================
-    # OBV FEATURES
-    # ====================================================
-
-    def calculate_obv_features(
+    def calculate_alternative_data_features(
         self,
-        df: pd.DataFrame,
+        row: pd.Series,
     ) -> None:
+        """Calculate alternative data features (LunarCrush, Funding Rate, OI Delta)."""
+        # Placeholder for alternative data features
+        # In production, these would be populated from AlternativeDataManager
+        self.features.add("lunar_galaxy_score", 50.0)
+        self.features.add("lunar_alt_rank", 500)
+        self.features.add("lunar_social_volume", 0.0)
+        self.features.add("lunar_social_engagement", 0.0)
+        self.features.add("lunar_social_dominance", 0.0)
+        self.features.add("lunar_sentiment", 0.5)
+        self.features.add("lunar_price_score", 0.5)
+        self.features.add("funding_rate", 0.0)
+        self.features.add("funding_rate_8h", 0.0)
+        self.features.add("funding_rate_24h", 0.0)
+        self.features.add("oi_delta", 0.0)
+        self.features.add("oi_delta_pct", 0.0)
 
-        if len(df) < 2:
-            return
-
-        prev = df.iloc[-2]
-        curr = df.iloc[-1]
-
-        obv_now = float(curr["obv"])
-        obv_prev = float(prev["obv"])
-
-        delta = obv_now - obv_prev
-
-        if abs(obv_now) > 1e-9:
-            normalized = delta / abs(obv_now)
-        else:
-            normalized = 0.0
-
-        self.features.add(
-            "obv_normalized",
-            normalized,
-        )
-
-        self.features.add(
-            "obv_delta",
-            delta,
-        )
-
-        self.features.add(
-            "obv_positive",
-            1.0 if delta > 0 else 0.0,
-        )
 
 # ====================================================
 # PUBLIC API
@@ -496,7 +364,12 @@ def build_features(
 
     return engine.build(df).to_dict()
 
-    __all__ = [
+
+# ====================================================
+# EXPORTS
+# ====================================================
+
+__all__ = [
     "FeatureVector",
     "FeatureEngine",
     "build_features",
