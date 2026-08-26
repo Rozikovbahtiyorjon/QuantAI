@@ -73,6 +73,11 @@ class BinanceConfig:
     def ws_base_url(self) -> str:
         return "wss://stream.binancefuture.com" if self.testnet else "wss://fstream.binance.com"
 
+    @property
+    def spot_api_url(self) -> str:
+        # apiRestrictions lives on the spot REST host for both envs
+        return "https://testnet.binance.vision" if self.testnet else "https://api.binance.com"
+
 
 # ============================================================
 # DATA CLASSES
@@ -286,6 +291,43 @@ class BinanceRestAdapter:
     # EXCHANGE INFO
     # ========================================================
     
+    async def verify_no_withdraw_permission(self) -> dict:
+        """
+        SECURITY GUARD (R1): refuse to operate with a key that can withdraw.
+
+        Queries GET /sapi/v1/account/apiRestrictions (signed, read perms).
+        Fail-closed: any ambiguity raises. Testnet keys without the spot
+        endpoint may skip via allow_unverified=True explicitly.
+        """
+        params = {"timestamp": int(time.time() * 1000),
+                  "recvWindow": self.config.recv_window}
+        url = f"{self.config.spot_api_url}/sapi/v1/account/apiRestrictions?{self._sign_params(params)}"
+
+        async with self.session.get(url, headers=self._headers()) as resp:
+            data = await resp.json(content_type=None)
+            if resp.status != 200:
+                raise PermissionError(
+                    f"SECURITY: cannot verify key permissions "
+                    f"(HTTP {resp.status}): {data}"
+                )
+
+        if data.get("canWithdraw"):
+            raise PermissionError(
+                "SECURITY: API key has WITHDRAW permission - "
+                "regenerate key WITHOUT withdrawals before live trading"
+            )
+        for perm in data.get("permissions", []):
+            if str(perm).upper() in {"WITHDRAW", "WITHDRAWALS"}:
+                raise PermissionError(
+                    f"SECURITY: key permission '{perm}' allows withdrawals"
+                )
+
+        return {
+            "can_trade": data.get("canTrade"),
+            "can_withdraw": data.get("canWithdraw", False),
+            "permissions": data.get("permissions", []),
+        }
+
     async def load_exchange_info(self) -> None:
         """Load symbol precision and filters."""
         data = await self._get("/fapi/v1/exchangeInfo", weight=10)

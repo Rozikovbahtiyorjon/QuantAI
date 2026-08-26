@@ -222,7 +222,13 @@ class ExecutionEngine:
         
         self.binance_rest = BinanceRestAdapter(self.config.binance)
         await self.binance_rest.__aenter__()
-        
+
+        # SECURITY GUARD (R1): never run against a key with withdrawal
+        # permission. Fail-closed for DRY_RUN/LIVE; testnet keys without
+        # the restrictions endpoint must set allow_unverified explicitly.
+        perms = await self.binance_rest.verify_no_withdraw_permission()
+        print(f"[SECURITY] key permissions verified: {perms}")
+
         # Initialize WebSocket
         self.binance_ws = BinanceWebSocketAdapter(self.config.binance, self.binance_rest)
         self.binance_ws.on_order_update = self._on_ws_order_update
