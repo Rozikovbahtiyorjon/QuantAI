@@ -30,6 +30,23 @@ class CrossSectionParams:
     rebalance_days: int = 7        # holding period length
     fee_per_side: float = 0.0005   # conservative per-side cost
 
+    # ---- Risk layer (P-C1.A) ----
+    # Volatility targeting: scale exposure so that the held basket's
+    # trailing annualized vol ~= target. None disables.
+    target_ann_vol: float | None = None
+    vol_lookback_days: int = 30
+
+    # Drawdown gate: when equity drawdown breaches soft stop, stay FLAT
+    # at subsequent rebalances until drawdown recovers above re-entry.
+    # None disables.
+    dd_soft_stop_pct: float | None = None      # e.g. -25.0
+    dd_reentry_pct: float | None = None        # e.g. -12.5
+
+    # Intra-basket weighting: 'equal' or 'inv_vol' (trailing per-name
+    # volatility weighting — smooths basket WITHOUT market timing).
+    weighting: str = "equal"
+    weight_vol_days: int = 30
+
     def __post_init__(self) -> None:
         if self.lookback_days < 1:
             raise ValueError("lookback_days must be >= 1")
@@ -39,6 +56,19 @@ class CrossSectionParams:
             raise ValueError("rebalance_days must be >= 1")
         if self.fee_per_side < 0:
             raise ValueError("fee_per_side cannot be negative")
+        if self.target_ann_vol is not None and self.target_ann_vol <= 0:
+            raise ValueError("target_ann_vol must be positive")
+        if self.dd_soft_stop_pct is not None:
+            if self.dd_reentry_pct is None:
+                raise ValueError("dd_reentry_pct required with dd_soft_stop_pct")
+            if not (self.dd_reentry_pct > self.dd_soft_stop_pct):
+                raise ValueError(
+                    "dd_reentry_pct must be closer to zero than dd_soft_stop_pct"
+                )
+        if self.weighting not in ("equal", "inv_vol"):
+            raise ValueError("weighting must be 'equal' or 'inv_vol'")
+        if self.weight_vol_days < 2:
+            raise ValueError("weight_vol_days must be >= 2")
 
 
 def backtest(prices: pd.DataFrame, params: CrossSectionParams) -> dict:
@@ -61,35 +91,82 @@ def backtest(prices: pd.DataFrame, params: CrossSectionParams) -> dict:
 
     equity = [1.0]
     periods: list[dict] = []
-    prev_set: set[str] = set()
+    prev_weights: dict[str, float] = {}
+    in_dd_pause = False
 
     t = p.lookback_days
     while t < n - 1:
+        # ---- drawdown gate (state machine, causal) ----
+        if p.dd_soft_stop_pct is not None:
+            peak = max(equity)
+            dd_now = (equity[-1] / peak - 1.0) * 100.0
+
+            if in_dd_pause:
+                if dd_now >= p.dd_reentry_pct:
+                    in_dd_pause = False
+            elif dd_now <= p.dd_soft_stop_pct:
+                in_dd_pause = True
+
         # ---- ranking: causal (uses rows <= t) ----
         row_now = prices.iloc[t]
         row_past = prices.iloc[t - p.lookback_days]
 
         mom = (row_now / row_past - 1.0).dropna()
 
-        if len(mom) == 0:
+        if len(mom) == 0 or in_dd_pause:
+            equity.append(equity[-1])          # flat bar (cash)
+            periods.append({
+                "start": prices.index[t],
+                "end": prices.index[min(t + p.rebalance_days, n - 1)],
+                "picked": [],
+                "gross": 0.0,
+                "cost": 0.0,
+                "net": 0.0,
+                "flat": True,
+            })
+            prev_weights = {}                   # full exit on next entry
             t += p.rebalance_days
             continue
 
         picked = list(mom.nlargest(min(p.top_k, len(mom))).index)
 
+        # ---- intra-basket weights (causal) ----
+        if p.weighting == "inv_vol":
+            hist = rets.iloc[max(0, t - p.weight_vol_days): t][picked]
+            vols = hist.std(ddof=1).replace(0, np.nan).dropna()
+            if len(vols) == len(picked):
+                inv = 1.0 / vols
+                weights = (inv / inv.sum()).to_dict()
+            else:
+                weights = {s: 1.0 / len(picked) for s in picked}
+        else:
+            weights = {s: 1.0 / len(picked) for s in picked}
+
+        # ---- vol targeting scale (causal: trailing returns only) ----
+        scale = 1.0
+        if p.target_ann_vol is not None:
+            lb_vol = min(p.vol_lookback_days, t)
+            hist = rets.iloc[t - lb_vol : t][picked].mean(axis=1, skipna=True).dropna()
+            if len(hist) > 2:
+                realized_daily = float(hist.std(ddof=1))
+                realized_ann = realized_daily * math.sqrt(365.0)
+                if realized_ann > 0:
+                    scale = min(1.0, float(p.target_ann_vol) / realized_ann)
+
         # ---- holding period returns ----
         seg = rets.iloc[t + 1 : t + 1 + p.rebalance_days][picked]
-        daily_port = seg.mean(axis=1, skipna=True).dropna()
+        w_series = pd.Series(weights)
+        daily_port = seg.fillna(0.0).mul(w_series, axis=1).sum(axis=1)
+        daily_port = daily_port[daily_port != 0.0] if len(daily_port) else daily_port
 
         gross_period = float((1.0 + daily_port).prod() - 1.0) if len(daily_port) else 0.0
 
-        # ---- costs on turnover ----
-        new_set = set(picked)
-        turned_over = len(new_set.symmetric_difference(prev_set))
-        changed_frac = turned_over / max(len(new_set | prev_set), 1)
-        cost = p.fee_per_side * 2.0 * changed_frac * len(picked) / max(p.top_k, 1)
-        net_period = gross_period - cost
-        prev_set = new_set
+        # ---- costs on weight turnover ----
+        turned = sum(abs(weights.get(s, 0.0) - prev_weights.get(s, 0.0))
+                     for s in set(weights) | set(prev_weights))
+        cost = p.fee_per_side * 2.0 * turned
+        net_period = (gross_period - cost) * scale
+        prev_weights = weights
 
         eq_prev = equity[-1]
         equity.append(eq_prev * (1.0 + net_period))
@@ -101,6 +178,8 @@ def backtest(prices: pd.DataFrame, params: CrossSectionParams) -> dict:
             "gross": gross_period,
             "cost": cost,
             "net": net_period,
+            "scale": round(scale, 4),
+            "flat": False,
         })
 
         t += p.rebalance_days

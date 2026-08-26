@@ -283,3 +283,84 @@ class TestFeedback:
         })
         variants = suggest_mutations({"p0": 5, "p1": 5}, bounds, max_variants=3)
         assert len(variants) == 3
+
+class TestGovernanceR4A:
+    def _pipe(self, tmp_path):
+        rules = PromotionRules(
+            min_pf_median=0.0, min_profitable_window_share=0.0,
+            max_drawdown_median_pct=-10_000.0, min_net_median_pct=-10_000.0,
+            min_trades_total=0, max_net_std_pct=10_000.0,
+        )
+        return ChampionPipeline(registry=StrategyRegistry(), rules=rules,
+                                store_path=tmp_path / "c.json")
+
+    @staticmethod
+    def _genome(sid):
+        from src.strategy_genome import StrategyGenome
+
+        return StrategyGenome(
+            strategy_id=sid, version="1", market="crypto",
+            timeframes=("1D",), features=("f",), indicators=("i",),
+            ml_model="none", regime_filters=("none",),
+            entry_logic={}, exit_logic={}, risk_profile="r",
+            position_sizing={}, portfolio_constraints={},
+        )
+
+    def test_resubmit_is_idempotent(self, tmp_path) -> None:
+        from src.champion.evaluation_pipeline import CandidateSpec
+
+        pipe = self._pipe(tmp_path)
+        spec = CandidateSpec("a", lambda: None)
+
+        pipe.submit_candidate(spec, self._genome("a"))
+        n_first = pipe.registry.count()
+        pipe.submit_candidate(spec, self._genome("a"))
+
+        assert pipe.registry.count() == n_first
+        assert any(h.event == "resubmit" for h in pipe.history)
+
+    def test_review_flags_failing_champion_without_demotion(self, tmp_path) -> None:
+        pipe = self._pipe(tmp_path)
+        pipe.submit_candidate(CandidateSpec("a", lambda: None), self._genome("a"))
+        pipe.registry.update_status("a", "champion")
+        pipe.registry.set_champion("a")
+
+        evals = {"a": {"rules_passed": False, "rules_flags": {"pf_ok": False}}}
+        res = pipe.review_champion(evals)
+
+        assert res["flagged"] is True
+        # status unchanged - system stays deployable
+        assert pipe.registry.get("a").status == "champion"
+        assert any(h.event == "champion_under_review" for h in pipe.history)
+
+    def test_review_recovers_on_pass(self, tmp_path) -> None:
+        pipe = self._pipe(tmp_path)
+        pipe.submit_candidate(CandidateSpec("a", lambda: None), self._genome("a"))
+        pipe.registry.update_status("a", "champion")
+        pipe.registry.set_champion("a")
+
+        fail = {"a": {"rules_passed": False, "rules_flags": {"pf_ok": False}}}
+        pipe.review_champion(fail)
+
+        ok = {"a": {"rules_passed": True, "rules_flags": {}}}
+        res = pipe.review_champion(ok)
+
+        assert res.get("recovered") is True
+        assert any(h.event == "champion_recovered" for h in pipe.history)
+
+    def test_flag_survives_persistence(self, tmp_path) -> None:
+        pipe = self._pipe(tmp_path)
+        pipe.submit_candidate(CandidateSpec("a", lambda: None), self._genome("a"))
+        pipe.registry.update_status("a", "champion")
+        pipe.registry.set_champion("a")
+
+        fail = {"a": {"rules_passed": False, "rules_flags": {}}}
+        pipe.review_champion(fail)
+        pipe.save()
+
+        pipe2 = ChampionPipeline(registry=StrategyRegistry(),
+                                 rules=pipe.rules,
+                                 store_path=tmp_path / "c.json")
+        pipe2._load()
+
+        assert getattr(pipe2, "flag:a", False) is True

@@ -109,6 +109,13 @@ class ChampionPipeline:
     # -------------------------------------------------- candidates
 
     def submit_candidate(self, spec: CandidateSpec, genome: Any) -> None:
+        if self.registry.contains(genome.strategy_id):
+            # idempotent resubmit (research iteration on same id):
+            # keep registry entry, refresh spec only.
+            self.specs[genome.strategy_id] = spec
+            self._log("resubmit", {"strategy_id": genome.strategy_id})
+            return
+
         self.registry.register(genome, status="candidate")
         self.specs[genome.strategy_id] = spec
         self._log("submit", {"strategy_id": genome.strategy_id})
@@ -218,6 +225,40 @@ class ChampionPipeline:
         self._log("rollback", {"from": champ_id, "to": prev})
         return {"rolled_back": True, "from": champ_id, "to": prev}
 
+    # -------------------------------------------------- governance
+
+    def review_champion(self, evaluations: dict[str, dict]) -> dict:
+        """
+        Governance pass AFTER each evaluation batch.
+
+        Champion failing rules -> FLAGGED (event + persistent flag).
+        Status stays 'champion': the system must remain deployable
+        until a qualified successor is promoted. Recovery clears flag.
+        """
+        champ_id = self.current_champion_id()
+        if champ_id is None or champ_id not in evaluations:
+            return {"flagged": False, "reason": "no champion or no eval"}
+
+        passed = evaluations[champ_id].get("rules_passed", False)
+        key = f"flag:{champ_id}"
+
+        if passed:
+            if getattr(self, key, False):
+                setattr(self, key, False)
+                self._log("champion_recovered", {"strategy_id": champ_id})
+                return {"flagged": False, "recovered": True}
+            return {"flagged": False}
+
+        if not getattr(self, key, False):
+            setattr(self, key, True)
+            failed = [k.replace("_ok", "") for k, v in
+                      evaluations[champ_id].get("rules_flags", {}).items() if not v]
+            self._log("champion_under_review",
+                      {"strategy_id": champ_id, "failed": failed})
+            return {"flagged": True, "failed": failed}
+
+        return {"flagged": True, "already_flagged": True}
+
     # -------------------------------------------------- persistence
 
     def save(self) -> None:
@@ -232,6 +273,8 @@ class ChampionPipeline:
                 for e in self.history
             ],
             "champion_stack": list(self._champion_stack),
+            "flags": {k[5:]: v for k, v in vars(self).items()
+                      if k.startswith("flag:")},
             "spec_params": {
                 sid: sp.params for sid, sp in self.specs.items()
             },
@@ -251,6 +294,8 @@ class ChampionPipeline:
             for h in data.get("history", [])
         ]
         self._champion_stack = list(data.get("champion_stack", []))
+        for sid, fl in data.get("flags", {}).items():
+            setattr(self, f"flag:{sid}", bool(fl))
 
         # rebuild specs with stored params; factories must be re-registered
         # by the caller via rebind_spec() (factories are code, not data).

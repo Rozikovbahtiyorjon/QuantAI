@@ -12,6 +12,8 @@ VALID_STATUSES = frozenset(
         "experimental",
         "validated",
         "champion",
+        "under_review",
+        "retired",
         "deprecated",
         "failed",
     }

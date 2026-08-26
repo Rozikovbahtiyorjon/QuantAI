@@ -158,3 +158,59 @@ class TestAdapterAndPromotion:
         assert pipe.current_champion_id() in {"xs_k1", "xs_k2"}
         pipe.save()
         assert (tmp_path / "champ.json").exists()
+
+class TestRiskLayer:
+    def _crash_wide(self):
+        rows = 260
+        idx = pd.date_range("2026-01-01", periods=rows, freq="D")
+        rng = np.random.default_rng(3)
+        up = 100 * np.cumprod(1 + rng.normal(0.004, 0.003, rows))
+        up[130:150] *= np.linspace(1.0, 0.55, 20)
+        up[150:] = up[149] * np.cumprod(1 + rng.normal(0.0005, 0.002, rows - 150))
+        return pd.DataFrame({"A": up, "B": up * 0.98}, index=idx)
+
+    def test_dd_gate_flattens_after_crash(self) -> None:
+        wide = self._crash_wide()
+        p = CrossSectionParams(lookback_days=10, top_k=1,
+                               dd_soft_stop_pct=-15.0, dd_reentry_pct=-7.0)
+        res = backtest(wide, p)
+
+        flats = [per for per in res["periods"] if per.get("flat")]
+        assert len(flats) >= 2
+        assert all(per["net"] == 0.0 for per in flats)
+
+    def test_vol_target_scales_exposure(self) -> None:
+        rows = 300
+        idx = pd.date_range("2026-01-01", periods=rows, freq="D")
+        rng = np.random.default_rng(5)
+        hi = 100 * np.cumprod(1 + rng.normal(0.004, 0.03, rows))
+        wide = pd.DataFrame({"A": hi,
+                             "B": hi * (1 + rng.normal(0, 0.001, rows))},
+                            index=idx)
+        p = CrossSectionParams(lookback_days=14, top_k=1, target_ann_vol=0.15)
+        res = backtest(wide, p)
+
+        scales = [per.get("scale", 1.0) for per in res["periods"]]
+        assert any(sc < 0.9 for sc in scales), "vol targeting never engaged"
+
+    def test_inv_vol_differs_from_equal_on_hetero_vols(self) -> None:
+        rows = 400
+        idx = pd.date_range("2026-01-01", periods=rows, freq="D")
+        rng = np.random.default_rng(9)
+        a = 100 * np.cumprod(1 + rng.normal(0.005, 0.001, rows))
+        b = 100 * np.cumprod(1 + rng.normal(0.005, 0.02, rows))
+        wide = pd.DataFrame({"A": a, "B": b}, index=idx)
+
+        eq = backtest(wide, CrossSectionParams(lookback_days=14, top_k=2,
+                                               weighting="equal"))
+        iv = backtest(wide, CrossSectionParams(lookback_days=14, top_k=2,
+                                               weighting="inv_vol"))
+        assert iv["stats"]["total_ret_pct"] > eq["stats"]["total_ret_pct"]
+
+    def test_param_validation(self) -> None:
+        with pytest.raises(ValueError):
+            CrossSectionParams(weighting="martingale")
+        with pytest.raises(ValueError):
+            CrossSectionParams(dd_soft_stop_pct=-25.0)
+        with pytest.raises(ValueError):
+            CrossSectionParams(dd_soft_stop_pct=-15.0, dd_reentry_pct=-25.0)
