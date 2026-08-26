@@ -35,6 +35,7 @@ from src.risk.risk_orchestrator import (
     RiskOrchestrator,
     create_default_orchestrator,
 )
+from src.strategy.ml_overlay import MLOverlay, MLQualityGateConfig  # noqa: F401 (re-export)
 from src.strategy import (
     SignalResult,
     generate_signal_result,
@@ -55,18 +56,6 @@ class PaperTradingStepResult:
     ml_used: bool = False
     ml_quality_gate_passed: bool = True
     ml_quality_reason: str = ""
-
-
-@dataclass
-class MLQualityGateConfig:
-    """Configuration for ML model quality gate."""
-    enabled: bool = True
-    min_balanced_accuracy: float = 0.52
-    min_f1_score: float = 0.30
-    min_precision: float = 0.25
-    min_recall: float = 0.25
-    max_models_without_retrain: int = 10
-    require_walk_forward_validation: bool = True
 
 
 class PaperTradingRunner:
@@ -142,13 +131,17 @@ class PaperTradingRunner:
         # ML INTEGRATION
         # =====================================================
         self.enable_ml = bool(enable_ml)
-        self.ml_model_path = ml_model_path
-        self.ml_config = ml_config or MLConfig()
-        self.ml_quality_gate = ml_quality_gate or MLQualityGateConfig()
+
+        # R1: ML mechanics live in strategy layer (MLOverlay).
+        self.ml_overlay = MLOverlay(
+            enable_ml=self.enable_ml,
+            ml_config=ml_config,
+            ml_quality_gate=ml_quality_gate,
+            ab_test_ml=ab_test_ml,
+        )
+        self.ml_config = self.ml_overlay.ml_config
+        self.ml_quality_gate = ml_quality_gate
         self.ab_test_ml = bool(ab_test_ml)
-        self._ml_engine: MLEngine | None = None
-        self._ml_models_since_retrain = 0
-        self._ab_test_counter = 0
 
         if self.enable_ml:
             self._load_ml_model()
@@ -183,70 +176,20 @@ class PaperTradingRunner:
     # =====================================================
 
     def _load_ml_model(self) -> bool:
-        """Load ML model from disk."""
-        try:
-            self._ml_engine = MLEngine(
-                config=self.ml_config,
-                load_existing=True,
-            )
-            if self._ml_engine.model is not None:
-                self._ml_models_since_retrain = 0
-                return True
-            return False
-        except Exception as e:
-            print(f"[ML] Failed to load model: {e}")
-            self._ml_engine = None
-            return False
+        """Delegate: model loading lives in MLOverlay (R1)."""
+        return self.ml_overlay.load_model()
 
     def _check_ml_quality_gate(self) -> tuple[bool, str]:
-        """
-        Check if ML model passes quality gate.
-        
-        Returns:
-            (passed, reason)
-        """
-        if not self.ml_quality_gate.enabled:
-            return True, "ML quality gate disabled."
-
-        if self._ml_engine is None or self._ml_engine.model is None:
-            return False, "No ML model loaded."
-
-        if self._ml_models_since_retrain >= self.ml_quality_gate.max_models_without_retrain:
-            return False, f"Model retrain limit exceeded ({self._ml_models_since_retrain} windows)"
-
-        return True, "ML quality gate passed."
+        """Delegate: quality gate lives in MLOverlay (R1)."""
+        return self.ml_overlay.check_quality_gate()
 
     def _get_ml_prediction(self, df: pd.DataFrame) -> tuple[str, float]:
-        """
-        Get ML prediction for current market state.
-        
-        Returns:
-            (signal, confidence)
-        """
-        if self._ml_engine is None:
-            return "HOLD", 0.0
-
-        try:
-            from src.feature_engine import build_features
-            features = build_features(df)
-            signal, confidence = self._ml_engine.predict_signal(
-                pd.DataFrame([features])
-            )
-            return signal, confidence
-        except Exception as e:
-            print(f"[ML] Prediction error: {e}")
-            return "HOLD", 0.0
+        """Delegate: prediction lives in MLOverlay (R1)."""
+        return self.ml_overlay.predict(df)
 
     def _should_use_ml(self) -> bool:
-        """Determine if ML should be used (supports A/B testing)."""
-        if not self.enable_ml:
-            return False
-        
-        if self.ab_test_ml:
-            self._ab_test_counter += 1
-            return self._ab_test_counter % 2 == 0
-        
-        return True
+        """Delegate: A/B decisioning lives in MLOverlay (R1)."""
+        return self.ml_overlay.should_use()
 
     # =====================================================
     # RISK CHECK (via RiskOrchestrator)
