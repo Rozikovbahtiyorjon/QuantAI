@@ -6,6 +6,12 @@
 - [ ] **Маскирование секретов**: `run.py config show`, логи — печатать только `...last4` ключей (`api_key/api_secret/token/password`)
 - [ ] **gitleaks** в CI на каждый push (+ bandit уже есть weekly)
 
+## P0-autonomy — автономный режим (перед фоновым запуском)
+- [ ] **Telegram-notifier**: события сделка/ребаланс/incident/gate-вердикт (~100 строк, конфиг готов)
+- [ ] **Daemon-обвязка**: systemd-unit / compose-service для `portfolio_long_run` + watchdog по свежести `state.updated_at`
+- [ ] **Ежедневная сводка** в Telegram (CSV-итоги дня; Sheets — опционально позже)
+- [ ] **Kill-switch файл** (`STOP` в каталоге сессии → graceful flat перед следующим баром)
+
 ## P1 — перед live-торговлей
 - [ ] Ключи: env с `chmod 600`, ротация после любого контакта вне сервера; IP-whitelist обязателен
 - [ ] ML: переобучить модели с `purge_pct ≥ горизонт лейблов`; прогнать CPCV; иначе `ml_enabled=False` навсегда
