@@ -18,6 +18,7 @@
 - [ ] Подключить `BinanceRateLimiter` в DRY/LIVE путь ExecutionBridge (hook готов)
 - [ ] Vault (Fernet+Postgres) — решить: подключать или удалить вместе с зависимостями
 - [ ] **Автовыбор плеча 3–10×**: `LeverageSelector` в `RiskOrchestrator` (формула `floor(0.8*entry/(entry-SL))` clamped [3,10], set {3,5,7,10}; ликвидация ≥20% за стопом; кросс-маржа + STOP_MARKET reduceOnly) — после R3-гейта
+- [ ] **Кросс-маржа дефолт + явный marginType**: `RiskSettings.margin_mode="CROSS"` (портфель) / `ISOLATED` опция для single-asset aggressive; `PositionSizer` → `OrderIntentData(marginType)` → `BinanceAdapter` ставит `POST /fapi/v1/marginType`; paper-брокер считает общий equity vs maintenance
 
 ## P1-optimization — Бритва Оккама (до live)
 - [ ] **Лимит индикаторов 2–3**: аудит `IndicatorSettings` (сейчас 8 активных), WF-абляция каждого индикатора на P-C1/P-C2 данных; удалить вклад <0.02 Sharpe без потери PF; запрет новых индикаторов без A/B через банк кандидатов
