@@ -311,6 +311,13 @@ feature_store_last_materialize_timestamp = Gauge(
     registry=quantai_registry,
 )
 
+feature_store_retrains_total = Counter(
+    "quantai_feature_store_retrains_total",
+    "Total drift-triggered retrains",
+    ["view", "result"],
+    registry=quantai_registry,
+)
+
 # --- Reconciliation Metrics ---
 
 reconciliation_runs_total = Counter(

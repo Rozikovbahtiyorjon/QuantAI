@@ -231,6 +231,58 @@
       ],
       "title": "Time Since Last Materialize",
       "type": "timeseries"
+    },
+    {
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 1},
+              {"color": "red", "value": 3}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 20},
+      "id": 9,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "pluginVersion": "9.5.0",
+      "targets": [
+        {
+          "datasource": "${DS_PROMETHEUS}",
+          "expr": "sum(increase(quantai_feature_store_retrains_total[1h]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Drift Retrains / h",
+      "type": "stat"
+    },
+    {
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 18, "x": 6, "y": 20},
+      "id": 10,
+      "targets": [
+        {
+          "datasource": "${DS_PROMETHEUS}",
+          "expr": "sum by (view, result) (increase(quantai_feature_store_retrains_total[1h]))",
+          "legendFormat": "{{view}}:{{result}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Retrains by Result",
+      "type": "timeseries"
     }
   ],
   "refresh": "10s",

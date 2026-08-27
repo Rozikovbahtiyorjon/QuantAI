@@ -13,6 +13,15 @@ except ImportError:
     LiveLoggerConfig = None  # type: ignore
     _LIVE_LOGGER_AVAILABLE = False
 
+try:
+    from src.automation.drift_trigger import DriftRetrainTrigger, DriftTriggerConfig
+
+    _DRIFT_TRIGGER_AVAILABLE = True
+except ImportError:
+    DriftRetrainTrigger = None  # type: ignore
+    DriftTriggerConfig = None  # type: ignore
+    _DRIFT_TRIGGER_AVAILABLE = False
+
 
 class RuntimeMode(str, Enum):
     DRY_RUN = "DRY_RUN"
@@ -71,6 +80,9 @@ class QuantAIProductionRuntime:
         enable_live_features: bool = False,
         live_logger: Any | None = None,
         live_logger_config: Any | None = None,
+        enable_drift_trigger: bool = False,
+        drift_trigger_config: Any | None = None,
+        drift_retrain_fn: Any | None = None,
     ) -> None:
         self.mode = self._normalize_mode(
             mode
@@ -92,6 +104,17 @@ class QuantAIProductionRuntime:
             if cfg is None:
                 cfg = LiveLoggerConfig()  # type: ignore
             self.live_logger = LiveFeatureLogger(config=cfg)  # type: ignore
+
+        # Drift-triggered retraining
+        self.enable_drift_trigger = bool(enable_drift_trigger)
+        self.drift_trigger: Any | None = None
+        if self.enable_drift_trigger:
+            if not _DRIFT_TRIGGER_AVAILABLE:
+                raise ImportError("DriftRetrainTrigger not available")
+            self.drift_trigger = DriftRetrainTrigger(  # type: ignore
+                config=drift_trigger_config,
+                retrain_fn=drift_retrain_fn,
+            )
 
     @staticmethod
     def _normalize_mode(
@@ -298,6 +321,35 @@ class QuantAIProductionRuntime:
             return None
         return self.live_logger.flush()
 
+    def check_drift_and_maybe_retrain(self) -> Any:
+        """Check drift and trigger retrain if needed (call periodically)."""
+        if not self.enable_drift_trigger or self.drift_trigger is None:
+            return None
+        return self.drift_trigger.maybe_trigger_retrain()
+
+    def _drift_trigger_check(self) -> RuntimeCheck:
+        if not self.enable_drift_trigger:
+            return RuntimeCheck(
+                name="drift_trigger",
+                passed=True,
+                message="Drift trigger disabled.",
+            )
+        if self.drift_trigger is None:
+            return RuntimeCheck(
+                name="drift_trigger",
+                passed=False,
+                message="Drift trigger enabled but not initialized.",
+            )
+        return RuntimeCheck(
+            name="drift_trigger",
+            passed=True,
+            message=(
+                f"Drift trigger ready: view={self.drift_trigger.config.live_view} "
+                f"PSI>{self.drift_trigger.config.psi_threshold}, "
+                f"triggers={self.drift_trigger.trigger_count}."
+            ),
+        )
+
     def preflight(
         self,
         readiness_result: Any = None,
@@ -309,6 +361,7 @@ class QuantAIProductionRuntime:
                 readiness_result
             ),
             self._live_feature_check(),
+            self._drift_trigger_check(),
         ]
 
         errors: List[str] = []
