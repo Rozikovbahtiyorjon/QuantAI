@@ -53,8 +53,9 @@
 - [ ] MC/Stress скоры в Tournament (хуки 0.5 нейтральные готовы)
 - [ ] Entry Engine (EV-гейт + Setup/Trigger/TTL + maker-зоны) — см. ADR-0004, только как кандидаты банка
 - [ ] **Мартингейл/усреднение — только experimental с Hard Stop**: `AveragingEngine` max 2 шага ×1.5, aggregate SL на весь пакет, риск пакета ≤20% от 40% резерва (≤8% депозита), gate `/stress-test -20% + лаг API + активная сетка` обязателен, дефолт OFF, never в автономном ядре
-- [ ] **Флэт-тайм-аут дефолт 60**: `ExitPolicy(time_exit_bars=60)` для флэт-режима (`atr_percentile<20` или `adx<18` + диапазон <0.5×ATR N баров) — высвобождение капитала для ротации, single-asset 1h ≈2.5 дня
 - [ ] **Hard Stop 10% портфеля / 25% флэт-тайм-аут**: `HardStopGuard` — принудительный flat всех позиций по DD от пика, независимо от усреднения; метрика `risk_kill_switch_active=1`, ручной reset; обязателен до live с плечом
+- [ ] **Авто-стейкинг (bet sizing)**: Kelly-fraction × confidence_score; `confidence≥0.8` → 3% риск, `0.6–0.8` → 1.5%, `<0.6` → 0.5%; `0.5%` минималка, кап 5% депозита на сделку
+- [ ] **Плечо авто 3/5/10/20/50×**: `LeverageSelector` в `RiskOrchestrator` — формула `floor(0.8*entry/(entry-SL))` clamped [3,5,10,20,50]; ликвидация ≥20% за стопом; кросс-маржа + STOP_MARKET reduceOnly; после R3-гейта
 - [ ] **P2-diversification: A(18 Binance) → B-1(3 криптобиржи) → B-2(PAXG/SPX via Alpaca)**: этап A (18 альтов, cross-sectional уже чемпион) валидируется; B-1 — redundancy + funding-basis (Binance+Bybit+OKX, один API CCXT); B-2 — первый кросс-актив через PAXG (золото на Binance, без новой биржи) и SPX (Alpaca/OANDA) для decorrelation
 - [ ] **P2-diversification: A(18 Binance) → B-1(3 криптобиржи) → B-2(PAXG/SPX via Alpaca)**: этап A (18 альтов, cross-sectional уже чемпион) валидируется; B-1 — redundancy + funding-basis (Binance+Bybit+OKX, один API CCXT); B-2 — первый кросс-актив через PAXG (золото на Binance, без новой биржи) и SPX (Alpaca/OANDA) для decorrelation
 
