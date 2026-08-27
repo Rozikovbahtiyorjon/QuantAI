@@ -17,6 +17,22 @@ import pandas as pd
 from src.feature_store.store import FeatureStore
 from src.feature_store.drift import detect_drift
 
+try:
+    from src.monitoring.metrics import (
+        feature_store_features_logged_total,
+        feature_store_versions_total,
+        feature_store_drift_alerts_total,
+        feature_store_buffer_size,
+        feature_store_psi,
+        feature_store_ks_pvalue,
+        feature_store_drift_check_duration_seconds,
+        feature_store_last_materialize_timestamp,
+    )
+
+    _METRICS_ENABLED = True
+except ImportError:
+    _METRICS_ENABLED = False
+
 
 @dataclass
 class LiveLoggerConfig:
@@ -98,6 +114,16 @@ class LiveFeatureLogger:
         with self._lock:
             self._buffer.append(entry)
             should_flush = len(self._buffer) >= self.config.buffer_size
+            if _METRICS_ENABLED:
+                try:
+                    feature_store_features_logged_total.labels(
+                        view=self.config.view_name
+                    ).inc()
+                    feature_store_buffer_size.labels(view=self.config.view_name).set(
+                        len(self._buffer)
+                    )
+                except Exception:
+                    pass
 
         if should_flush:
             self.flush()
@@ -132,6 +158,15 @@ class LiveFeatureLogger:
             )
             self._last_materialized_version = meta["version"]
             self._total_logged += len(df)
+            if _METRICS_ENABLED:
+                try:
+                    feature_store_versions_total.labels(view=self.config.view_name).inc()
+                    feature_store_buffer_size.labels(view=self.config.view_name).set(0)
+                    feature_store_last_materialize_timestamp.labels(
+                        view=self.config.view_name
+                    ).set(time.time())
+                except Exception:
+                    pass
 
             # Periodic drift check vs reference
             if (
@@ -165,6 +200,7 @@ class LiveFeatureLogger:
         Compare latest live version vs reference (training) version.
         Returns DriftAlert if drift detected, else None.
         """
+        start = time.time()
         try:
             ref_view = self.config.reference_view or self.config.view_name
             ref_version = self.config.reference_version
@@ -190,6 +226,22 @@ class LiveFeatureLogger:
                 psi_threshold=self.config.psi_threshold,
                 ks_p_threshold=self.config.ks_p_threshold,
             )
+            # Metrics: observe duration even when no drift
+            if _METRICS_ENABLED:
+                try:
+                    feature_store_drift_check_duration_seconds.labels(
+                        view=self.config.view_name
+                    ).observe(time.time() - start)
+                    for _, row in drift_df.iterrows():
+                        feature_store_psi.labels(
+                            view=self.config.view_name, feature=row["feature"]
+                        ).set(row["psi"])
+                        feature_store_ks_pvalue.labels(
+                            view=self.config.view_name, feature=row["feature"]
+                        ).set(row["ks_pvalue"])
+                except Exception:
+                    pass
+
             if drift_df.empty:
                 return None
 
@@ -208,6 +260,14 @@ class LiveFeatureLogger:
                 ),
             )
             self._drift_alerts.append(alert)
+            if _METRICS_ENABLED:
+                try:
+                    for _, row in drifted.iterrows():
+                        feature_store_drift_alerts_total.labels(
+                            view=self.config.view_name, feature=row["feature"]
+                        ).inc()
+                except Exception:
+                    pass
             print(alert.message)
             for _, row in drifted.head(5).iterrows():
                 print(f"  - {row['feature']}: PSI={row['psi']:.3f} KS_p={row['ks_pvalue']:.4f}")
@@ -215,8 +275,22 @@ class LiveFeatureLogger:
             return alert
 
         except FileNotFoundError:
+            if _METRICS_ENABLED:
+                try:
+                    feature_store_drift_check_duration_seconds.labels(
+                        view=self.config.view_name
+                    ).observe(time.time() - start)
+                except Exception:
+                    pass
             return None
         except Exception as e:
+            if _METRICS_ENABLED:
+                try:
+                    feature_store_drift_check_duration_seconds.labels(
+                        view=self.config.view_name
+                    ).observe(time.time() - start)
+                except Exception:
+                    pass
             print(f"[LiveLogger] drift check error: {e}")
             return None
 

@@ -4,6 +4,15 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, List, Optional
 
+try:
+    from src.feature_store.live_logger import LiveFeatureLogger, LiveLoggerConfig
+
+    _LIVE_LOGGER_AVAILABLE = True
+except ImportError:
+    LiveFeatureLogger = None  # type: ignore
+    LiveLoggerConfig = None  # type: ignore
+    _LIVE_LOGGER_AVAILABLE = False
+
 
 class RuntimeMode(str, Enum):
     DRY_RUN = "DRY_RUN"
@@ -59,6 +68,9 @@ class QuantAIProductionRuntime:
         self,
         mode: RuntimeMode | str = RuntimeMode.DRY_RUN,
         require_readiness: bool = True,
+        enable_live_features: bool = False,
+        live_logger: Any | None = None,
+        live_logger_config: Any | None = None,
     ) -> None:
         self.mode = self._normalize_mode(
             mode
@@ -69,6 +81,17 @@ class QuantAIProductionRuntime:
         )
 
         self._running = False
+
+        # Live Feature Store (auto-logging + drift)
+        self.enable_live_features = bool(enable_live_features)
+        self.live_logger: Any | None = live_logger
+        if self.enable_live_features and self.live_logger is None:
+            if not _LIVE_LOGGER_AVAILABLE:
+                raise ImportError("LiveFeatureLogger not available")
+            cfg = live_logger_config
+            if cfg is None:
+                cfg = LiveLoggerConfig()  # type: ignore
+            self.live_logger = LiveFeatureLogger(config=cfg)  # type: ignore
 
     @staticmethod
     def _normalize_mode(
@@ -232,6 +255,49 @@ class QuantAIProductionRuntime:
             ),
         )
 
+    def _live_feature_check(self) -> RuntimeCheck:
+        if not self.enable_live_features:
+            return RuntimeCheck(
+                name="live_feature_store",
+                passed=True,
+                message="Live feature logging disabled.",
+            )
+        if self.live_logger is None:
+            return RuntimeCheck(
+                name="live_feature_store",
+                passed=False,
+                message="Live feature logging enabled but logger not initialized.",
+            )
+        try:
+            # Probe store writability
+            _ = self.live_logger.store.root
+            return RuntimeCheck(
+                name="live_feature_store",
+                passed=True,
+                message=(
+                    f"Live feature store ready: view="
+                    f"{self.live_logger.config.view_name}, "
+                    f"buffer={self.live_logger.buffered_count}."
+                ),
+            )
+        except Exception as exc:
+            return RuntimeCheck(
+                name="live_feature_store",
+                passed=False,
+                message=f"Live feature store not ready: {exc}",
+            )
+
+    def log_live_features(self, features: dict) -> bool:
+        """Auto-log live features (non-blocking). Returns True if flushed."""
+        if not self.enable_live_features or self.live_logger is None:
+            return False
+        return bool(self.live_logger.log(features))
+
+    def flush_live_features(self) -> Any:
+        if self.live_logger is None:
+            return None
+        return self.live_logger.flush()
+
     def preflight(
         self,
         readiness_result: Any = None,
@@ -242,6 +308,7 @@ class QuantAIProductionRuntime:
             self._readiness_check(
                 readiness_result
             ),
+            self._live_feature_check(),
         ]
 
         errors: List[str] = []
@@ -351,6 +418,13 @@ class QuantAIProductionRuntime:
                     )
                 ],
             )
+
+        # Flush live features before stopping
+        if self.enable_live_features and self.live_logger is not None:
+            try:
+                self.live_logger.flush()
+            except Exception:
+                pass
 
         self._running = False
 

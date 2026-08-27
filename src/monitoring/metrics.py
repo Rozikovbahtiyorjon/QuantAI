@@ -252,6 +252,65 @@ ml_disagreement_blocks = Counter(
     registry=quantai_registry,
 )
 
+# --- Feature Store Metrics ---
+
+feature_store_features_logged_total = Counter(
+    "quantai_feature_store_features_logged_total",
+    "Total live features logged to Feature Store",
+    ["view"],
+    registry=quantai_registry,
+)
+
+feature_store_versions_total = Counter(
+    "quantai_feature_store_versions_total",
+    "Total Feature Store versions materialized",
+    ["view"],
+    registry=quantai_registry,
+)
+
+feature_store_drift_alerts_total = Counter(
+    "quantai_feature_store_drift_alerts_total",
+    "Total drift alerts fired",
+    ["view", "feature"],
+    registry=quantai_registry,
+)
+
+feature_store_buffer_size = Gauge(
+    "quantai_feature_store_buffer_size",
+    "Current live feature buffer size",
+    ["view"],
+    registry=quantai_registry,
+)
+
+feature_store_psi = Gauge(
+    "quantai_feature_store_psi",
+    "Population Stability Index per feature",
+    ["view", "feature"],
+    registry=quantai_registry,
+)
+
+feature_store_ks_pvalue = Gauge(
+    "quantai_feature_store_ks_pvalue",
+    "KS-test p-value per feature",
+    ["view", "feature"],
+    registry=quantai_registry,
+)
+
+feature_store_drift_check_duration_seconds = Histogram(
+    "quantai_feature_store_drift_check_duration_seconds",
+    "Drift check duration",
+    ["view"],
+    buckets=[0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0],
+    registry=quantai_registry,
+)
+
+feature_store_last_materialize_timestamp = Gauge(
+    "quantai_feature_store_last_materialize_timestamp",
+    "Unix timestamp of last materialization",
+    ["view"],
+    registry=quantai_registry,
+)
+
 # --- Reconciliation Metrics ---
 
 reconciliation_runs_total = Counter(
