@@ -20,7 +20,8 @@ This module does NOT:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Optional, List, Dict, Any
 
 import pandas as pd
 
@@ -34,12 +35,57 @@ from src.risk.risk_context import RiskContext
 from src.risk.risk_orchestrator import (
     RiskOrchestrator,
     create_default_orchestrator,
+    RiskDecision,
 )
 from src.strategy.ml_overlay import MLOverlay, MLQualityGateConfig  # noqa: F401 (re-export)
 from src.strategy import (
     SignalResult,
     generate_signal_result,
 )
+
+
+@dataclass
+class DecisionRecord:
+    """
+    Complete audit trail for every trading decision.
+    
+    Captures the full context of why a trade was made (or not made).
+    """
+    timestamp: datetime
+    symbol: str
+    timeframe: str
+    
+    # Market context
+    market_state: Dict[str, Any]
+    
+    # Features used
+    features: Dict[str, float]
+    
+    # ML predictions
+    ml_prediction: str
+    ml_probability: float
+    
+    # Confidence & strategy
+    confidence: float
+    strategy_signal: str
+    
+    # Risk decision
+    risk_decision: Dict[str, Any]
+    
+    # Position sizing
+    position_size: float
+    entry: float
+    stop_loss: float
+    take_profit: float
+    
+    # Final outcome
+    final_decision: str  # "OPEN", "REJECT", "HOLD", "FLIP", "CLOSE"
+    reason_codes: List[str]
+    
+    # Metadata
+    step_index: int
+    balance_before: float
+    equity_before: float
 
 
 @dataclass
@@ -56,6 +102,8 @@ class PaperTradingStepResult:
     ml_used: bool = False
     ml_quality_gate_passed: bool = True
     ml_quality_reason: str = ""
+    # Decision record
+    decision_record: Optional[DecisionRecord] = None
 
 
 class PaperTradingRunner:
@@ -146,9 +194,12 @@ class PaperTradingRunner:
         if self.enable_ml:
             self._load_ml_model()
 
+        # Decision records for audit trail
+        self.decision_records: List[DecisionRecord] = []
+
     # =====================================================
-# CURRENT EXPOSURE
-# =====================================================
+    # CURRENT EXPOSURE
+    # =====================================================
 
     def _current_exposure(self) -> float:
         """
@@ -298,6 +349,82 @@ class PaperTradingRunner:
             decision.quantity,
         )
 
+    def _create_decision_record(
+        self,
+        signal: SignalResult,
+        df: pd.DataFrame | None,
+        final_decision: str,
+        reason_codes: list[str],
+        risk_approved: bool,
+        risk_reason: str,
+        ml_signal: str,
+        ml_confidence: float,
+        ml_used: bool,
+        position_size: float,
+        position_opened: bool,
+        position_closed: bool,
+    ) -> DecisionRecord:
+        """
+        Create a comprehensive DecisionRecord for audit trail.
+        
+        Captures full context of the trading decision including
+        market state, features, ML predictions, risk assessment,
+        and final outcome.
+        """
+        # Extract features from df if available
+        features = {}
+        market_state = {}
+        if df is not None and not df.empty:
+            last_row = df.iloc[-1]
+            # Extract numeric features (exclude target, future_return, etc.)
+            for col in df.columns:
+                if col not in ["target", "future_return", "index"]:
+                    val = last_row.get(col)
+                    if pd.api.types.is_numeric_dtype(type(val)) or isinstance(val, (int, float)):
+                        features[col] = float(val) if not pd.isna(val) else 0.0
+            
+            # Market state summary
+            market_state = {
+                "close": float(last_row.get("close", 0)),
+                "volume": float(last_row.get("volume", 0)),
+                "atr": float(last_row.get("atr", 0)) if "atr" in last_row else 0,
+                "regime": str(last_row.get("regime", "UNKNOWN")) if "regime" in last_row else "UNKNOWN",
+            }
+        
+        # Get confidence from signal if available
+        confidence = getattr(signal, 'confidence', 0.0) or 0.0
+        
+        # Build risk decision dict
+        risk_decision = {
+            "allowed": risk_approved,
+            "reason": risk_reason,
+            "position_size": position_size,
+            "stop_loss": signal.stop_loss,
+            "take_profit": signal.take_profit,
+        }
+        
+        return DecisionRecord(
+            timestamp=datetime.now(timezone.utc),
+            symbol=signal.intent.symbol if hasattr(signal, 'intent') and signal.intent else "UNKNOWN",
+            timeframe="15m",  # Default, could be configurable
+            market_state=market_state,
+            features=features,
+            ml_prediction=ml_signal,
+            ml_probability=ml_confidence / 100.0 if ml_confidence > 1 else ml_confidence,
+            confidence=confidence,
+            strategy_signal=signal.signal,
+            risk_decision=risk_decision,
+            position_size=position_size,
+            entry=signal.entry,
+            stop_loss=signal.stop_loss,
+            take_profit=signal.take_profit or 0.0,
+            final_decision=final_decision,
+            reason_codes=reason_codes,
+            step_index=len(self.decision_records),
+            balance_before=self.engine.balance,
+            equity_before=self.engine.equity if hasattr(self.engine, 'equity') else self.engine.balance,
+        )
+
     # =====================================================
     # PROCESS SIGNAL
     # =====================================================
@@ -342,6 +469,20 @@ class PaperTradingRunner:
         # -------------------------------------------------
 
         if signal.signal == "HOLD":
+            decision_record = self._create_decision_record(
+                signal=signal,
+                df=df,
+                final_decision="HOLD",
+                reason_codes=["HOLD_SIGNAL"],
+                risk_approved=True,
+                risk_reason="HOLD signal.",
+                ml_signal="HOLD",
+                ml_confidence=0.0,
+                ml_used=False,
+                position_size=0.0,
+                position_opened=False,
+                position_closed=False,
+            )
             return PaperTradingStepResult(
                 signal=signal,
                 trade=None,
@@ -354,6 +495,7 @@ class PaperTradingRunner:
                 ml_used=False,
                 ml_quality_gate_passed=True,
                 ml_quality_reason="",
+                decision_record=decision_record,
             )
 
         # -------------------------------------------------
@@ -430,6 +572,20 @@ class PaperTradingRunner:
                    (strategy_signal == "SELL" and ml_signal == "BUY"):
                     risk_approved = False
                     risk_reason = f"ML disagrees: strategy={strategy_signal}, ML={ml_signal}"
+                    decision_record = self._create_decision_record(
+                        signal=signal,
+                        df=df,
+                        final_decision="REJECT",
+                        reason_codes=["ML_DISAGREES"],
+                        risk_approved=False,
+                        risk_reason=risk_reason,
+                        ml_signal=ml_signal,
+                        ml_confidence=ml_confidence,
+                        ml_used=ml_used,
+                        position_size=0.0,
+                        position_opened=False,
+                        position_closed=False,
+                    )
                     return PaperTradingStepResult(
                         signal=signal,
                         trade=None,
@@ -442,6 +598,7 @@ class PaperTradingRunner:
                         ml_used=ml_used,
                         ml_quality_gate_passed=ml_quality_gate_passed,
                         ml_quality_reason=ml_quality_reason,
+                        decision_record=decision_record,
                     )
 
         # -------------------------------------------------
@@ -471,6 +628,20 @@ class PaperTradingRunner:
                 # R0.1 invariant: rejected risk leaves the engine
                 # state UNCHANGED. On a flip the old position is NOT
                 # closed (decision is atomic: close+open together).
+                decision_record = self._create_decision_record(
+                    signal=signal,
+                    df=df,
+                    final_decision="REJECT",
+                    reason_codes=["RISK_REJECTED"],
+                    risk_approved=False,
+                    risk_reason=risk_reason,
+                    ml_signal=ml_signal,
+                    ml_confidence=ml_confidence,
+                    ml_used=ml_used,
+                    position_size=0.0,
+                    position_opened=False,
+                    position_closed=False,
+                )
                 return PaperTradingStepResult(
                     signal=signal,
                     trade=None,
@@ -483,6 +654,7 @@ class PaperTradingRunner:
                     ml_used=ml_used,
                     ml_quality_gate_passed=ml_quality_gate_passed,
                     ml_quality_reason=ml_quality_reason,
+                    decision_record=decision_record,
                 )
 
         # -------------------------------------------------
@@ -493,6 +665,20 @@ class PaperTradingRunner:
             self.engine.has_position
             and current_side == requested_side
         ):
+            decision_record = self._create_decision_record(
+                signal=signal,
+                df=df,
+                final_decision="REJECT",
+                reason_codes=["SAME_SIDE_POSITION_EXISTS"],
+                risk_approved=False,
+                risk_reason="Already have position on same side",
+                ml_signal=ml_signal,
+                ml_confidence=ml_confidence,
+                ml_used=ml_used,
+                position_size=0.0,
+                position_opened=False,
+                position_closed=False,
+            )
             return PaperTradingStepResult(
                 signal=signal,
                 trade=None,
@@ -505,6 +691,7 @@ class PaperTradingRunner:
                 ml_used=ml_used,
                 ml_quality_gate_passed=ml_quality_gate_passed,
                 ml_quality_reason=ml_quality_reason,
+                decision_record=decision_record,
             )
 
         # -------------------------------------------------
@@ -535,6 +722,25 @@ class PaperTradingRunner:
             ),
         )
 
+        final_decision = "FLIP" if position_closed else "OPEN"
+        reason_codes = ["POSITION_OPENED"]
+        if position_closed:
+            reason_codes.append("FLIP")
+
+        decision_record = self._create_decision_record(
+            signal=signal,
+            df=df,
+            final_decision=final_decision,
+            reason_codes=reason_codes,
+            risk_approved=risk_approved,
+            risk_reason=risk_reason,
+            ml_signal=ml_signal,
+            ml_confidence=ml_confidence,
+            ml_used=ml_used,
+            position_size=risk_quantity if self.enable_risk_controls else self.quantity,
+            position_opened=True,
+            position_closed=position_closed,
+        )
         return PaperTradingStepResult(
             signal=signal,
             trade=trade,
@@ -547,6 +753,7 @@ class PaperTradingRunner:
             ml_used=ml_used,
             ml_quality_gate_passed=ml_quality_gate_passed,
             ml_quality_reason=ml_quality_reason,
+            decision_record=decision_record,
         )
 
     # =====================================================
@@ -577,6 +784,20 @@ class PaperTradingRunner:
             price=price
         )
 
+        decision_record = self._create_decision_record(
+            signal=signal,
+            df=None,
+            final_decision="CLOSE",
+            reason_codes=["MANUAL_CLOSE"],
+            risk_approved=True,
+            risk_reason="Manual position close.",
+            ml_signal="HOLD",
+            ml_confidence=0.0,
+            ml_used=False,
+            position_size=0.0,
+            position_opened=False,
+            position_closed=True,
+        )
         return PaperTradingStepResult(
             signal=signal,
             trade=trade,
@@ -584,6 +805,7 @@ class PaperTradingRunner:
             position_closed=True,
             risk_approved=True,
             risk_reason="Manual position close.",
+            decision_record=decision_record,
         )
 
     # =====================================================
@@ -692,6 +914,40 @@ class PaperTradingRunner:
 
         self.engine.reset()
         self.risk_orchestrator.reset()
+        self.decision_records.clear()
+
+
+    def get_decision_records(self) -> List[DecisionRecord]:
+        """Get all recorded decisions."""
+        return list(self.decision_records)
+
+
+    def export_decision_records(self) -> list[dict]:
+        """Export decision records as list of dicts for serialization."""
+        return [
+            {
+                "timestamp": dr.timestamp.isoformat(),
+                "symbol": dr.symbol,
+                "timeframe": dr.timeframe,
+                "market_state": dr.market_state,
+                "features": dr.features,
+                "ml_prediction": dr.ml_prediction,
+                "ml_probability": dr.ml_probability,
+                "confidence": dr.confidence,
+                "strategy_signal": dr.strategy_signal,
+                "risk_decision": dr.risk_decision,
+                "position_size": dr.position_size,
+                "entry": dr.entry,
+                "stop_loss": dr.stop_loss,
+                "take_profit": dr.take_profit,
+                "final_decision": dr.final_decision,
+                "reason_codes": dr.reason_codes,
+                "step_index": dr.step_index,
+                "balance_before": dr.balance_before,
+                "equity_before": dr.equity_before,
+            }
+            for dr in self.decision_records
+        ]
 
 
 # =========================================================
@@ -699,6 +955,7 @@ class PaperTradingRunner:
 # =========================================================
 
 __all__ = [
+    "DecisionRecord",
     "PaperTradingStepResult",
     "PaperTradingRunner",
 ]

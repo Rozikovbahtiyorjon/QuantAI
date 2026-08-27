@@ -237,6 +237,8 @@ async def initialize_execution_engine(
     order_manager: OrderManager,
     risk_orchestrator: RiskOrchestrator,
     reconciliation_engine: Optional[ReconciliationEngine],
+    rate_limiter: Optional[MultiLimitRateLimiter] = None,
+    order_deduplicator: Optional[OrderDeduplicator] = None,
 ) -> ExecutionEngine:
     """Initialize execution engine."""
     log_info(logger, "Initializing execution engine...")
@@ -267,6 +269,8 @@ async def initialize_execution_engine(
     execution_engine = ExecutionEngine(
         config=exec_config,
         paper_engine=paper_engine,
+        rate_limiter=rate_limiter,
+        order_deduplicator=order_deduplicator,
         on_fill=lambda f: metrics.record_fill_latency(
             f.symbol, "MARKET", f.timestamp.timestamp()  # placeholder
         ),
@@ -277,6 +281,10 @@ async def initialize_execution_engine(
     execution_engine.binance_rest = binance_rest
     execution_engine.binance_ws = binance_ws
     execution_engine.paper_engine = state.paper_engine
+    
+    # Inject rate_limiter into binance_rest if available
+    if binance_rest and rate_limiter:
+        binance_rest.rate_limiter = rate_limiter
     
     await execution_engine.start()
     log_info(logger, f"Execution engine started in {mode.value} mode")
@@ -431,27 +439,27 @@ async def startup() -> AppState:
         logger, state.binance_rest, state.order_manager
     )
     
-    # 8. Execution engine
+    # 8. Order deduplicator (moved before execution engine)
+    state.order_deduplicator = await initialize_order_deduplicator(logger)
+    
+    # 9. Rate limiter (moved before execution engine)
+    state.rate_limiter = await initialize_rate_limiter(logger)
+    
+    # 10. Execution engine
     state.execution_engine = await initialize_execution_engine(
         logger, state, state.paper_engine, state.binance_rest,
         state.binance_ws, state.order_manager, state.risk_orchestrator,
-        state.reconciliation_engine
+        state.reconciliation_engine, state.rate_limiter, state.order_deduplicator
     )
     
-    # 9. Health checker
+    # 11. Health checker
     state.health_checker = await initialize_health_checker(logger, state)
     
-    # 10. Metrics endpoint
+    # 12. Metrics endpoint
     await initialize_metrics_endpoint(logger)
     
-    # 11. Checkpoint manager (disaster recovery)
+    # 13. Checkpoint manager (disaster recovery)
     state.checkpoint_manager = await initialize_checkpoint_manager(logger, state)
-    
-    # 12. Order deduplicator
-    state.order_deduplicator = await initialize_order_deduplicator(logger)
-    
-    # 13. Rate limiter
-    state.rate_limiter = await initialize_rate_limiter(logger)
     
     elapsed = time.time() - start_time
     log_info(logger, "=" * 60)

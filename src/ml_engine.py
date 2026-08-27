@@ -60,6 +60,7 @@ from sklearn.utils.class_weight import compute_sample_weight
 from xgboost import XGBClassifier
 
 from src.model_manager import ModelManager
+from src.ml_ensemble import HeterogeneousEnsemble, EnsembleConfig
 
 
 # ====================================================
@@ -95,6 +96,13 @@ class MLConfig:
     regime_aware: bool = False
     regime_min_samples: int = 150
     n_test_folds: int = 2            # For combinatorial CV
+
+    # Ensemble settings
+    use_ensemble: bool = False
+    ensemble_use_lightgbm: bool = True
+    ensemble_use_catboost: bool = True
+    ensemble_regime_weighted: bool = True
+    ensemble_min_samples_per_regime: int = 150
 
 
 # ====================================================
@@ -186,47 +194,40 @@ class MLEngine:
             self.model = (
                 self._create_model()
             )
+        
+        # Track if using ensemble
+        self._use_ensemble = self.config.use_ensemble
 
     # ====================================================
     # CREATE MODEL
     # ====================================================
 
-    def _create_model(self) -> XGBClassifier:
-
+    def _create_model(self):
+        """Create model - either XGBoost or HeterogeneousEnsemble based on config."""
+        if self._use_ensemble:
+            ensemble_config = EnsembleConfig(
+                enabled=True,
+                use_lightgbm=self.config.ensemble_use_lightgbm,
+                use_catboost=self.config.ensemble_use_catboost,
+                regime_weighted=self.config.ensemble_regime_weighted,
+                min_samples_per_regime=self.config.ensemble_min_samples_per_regime,
+            )
+            return HeterogeneousEnsemble(
+                base_config=self.config,
+                ensemble_config=ensemble_config,
+            )
+        
         return XGBClassifier(
-
-            n_estimators=(
-                self.config.n_estimators
-            ),
-
-            max_depth=(
-                self.config.max_depth
-            ),
-
-            learning_rate=(
-                self.config.learning_rate
-            ),
-
-            subsample=(
-                self.config.subsample
-            ),
-
-            colsample_bytree=(
-                self.config.colsample_bytree
-            ),
-
-            random_state=(
-                self.config.random_state
-            ),
-
+            n_estimators=self.config.n_estimators,
+            max_depth=self.config.max_depth,
+            learning_rate=self.config.learning_rate,
+            subsample=self.config.subsample,
+            colsample_bytree=self.config.colsample_bytree,
+            random_state=self.config.random_state,
             objective="multi:softprob",
-
             num_class=3,
-
             eval_metric="mlogloss",
-
             tree_method="hist",
-
         )
 
     # ====================================================
@@ -509,8 +510,9 @@ class MLEngine:
             "=" * 60
         )
 
+        model_type = "HETEROGENEOUS ENSEMBLE" if self._use_ensemble else "XGBOOST v2.0"
         print(
-            "TRAINING XGBOOST v2.0 (PurgedKFold CV)"
+            f"TRAINING {model_type} (PurgedKFold CV)"
         )
 
         print(
@@ -600,7 +602,13 @@ class MLEngine:
                 )
 
             fold_model = self._create_model()
-            fold_model.fit(X_tr, y_tr, sample_weight=sample_weight)
+            
+            # Handle ensemble vs XGBoost fit
+            if self._use_ensemble:
+                # Ensemble doesn't use sample_weight in the same way
+                fold_model.fit(X_tr, y_tr)
+            else:
+                fold_model.fit(X_tr, y_tr, sample_weight=sample_weight)
 
             pred_xgb = fold_model.predict(X_te)
             prob = fold_model.predict_proba(X_te)
@@ -674,7 +682,12 @@ class MLEngine:
             )
 
         self.model = self._create_model()
-        self.model.fit(X_full, y_full, sample_weight=sample_weight)
+        
+        # Handle ensemble vs XGBoost fit for final model
+        if self._use_ensemble:
+            self.model.fit(X_full, y_full)
+        else:
+            self.model.fit(X_full, y_full, sample_weight=sample_weight)
 
         print("Final model training completed.")
         print()

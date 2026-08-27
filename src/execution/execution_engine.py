@@ -36,6 +36,8 @@ from src.execution.binance_adapter import (
     BinanceRestAdapter,
     BinanceWebSocketAdapter,
 )
+from src.production.rate_limiter import MultiLimitRateLimiter
+from src.production.order_deduplication import OrderDeduplicator
 
 
 class ExecutionMode(str, Enum):
@@ -114,6 +116,9 @@ class ExecutionEngine:
         config: ExecutionConfig,
         # Paper trading fallback
         paper_engine: Optional[Any] = None,
+        # Production guards
+        rate_limiter: Optional[MultiLimitRateLimiter] = None,
+        order_deduplicator: Optional[OrderDeduplicator] = None,
         # Callbacks
         on_fill: Optional[Callable[[Fill], None]] = None,
         on_order_update: Optional[Callable[[Order], None]] = None,
@@ -122,6 +127,8 @@ class ExecutionEngine:
     ) -> None:
         self.config = config
         self.paper_engine = paper_engine
+        self.rate_limiter = rate_limiter
+        self.order_deduplicator = order_deduplicator
         
         self._on_fill = on_fill
         self._on_order_update = on_order_update
@@ -296,6 +303,33 @@ class ExecutionEngine:
     async def _submit_order_to_exchange(self, order: Order) -> bool:
         """Submit order to exchange (called by OrderManager)."""
         self._stats.orders_submitted += 1
+        
+        # Deduplication check
+        if self.order_deduplicator and order.intent:
+            idempotency_key = f"{order.intent.symbol}|{order.intent.side.value}|{order.intent.quantity}|{order.intent.price or 'MARKET'}|{order.intent.order_type.value}"
+            is_new, existing_id = await self.order_deduplicator.check_and_register(
+                idempotency_key,
+                {
+                    "symbol": order.intent.symbol,
+                    "side": order.intent.side.value,
+                    "quantity": order.intent.quantity,
+                    "price": order.intent.price,
+                    "order_type": order.intent.order_type.value,
+                }
+            )
+            if not is_new:
+                order.reject(f"Duplicate order detected (existing: {existing_id})")
+                self._stats.orders_rejected += 1
+                return False
+        
+        # Rate limiting for live/dry-run modes
+        if self.rate_limiter and self.config.mode in {ExecutionMode.LIVE, ExecutionMode.DRY_RUN}:
+            endpoint = "/fapi/v1/order"
+            acquired = await self.rate_limiter.acquire_for_endpoint(endpoint)
+            if not acquired:
+                order.reject("Rate limit exceeded")
+                self._stats.orders_rejected += 1
+                return False
         
         try:
             if self.config.mode == ExecutionMode.LIVE:

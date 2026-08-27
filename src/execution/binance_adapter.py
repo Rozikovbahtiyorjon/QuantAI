@@ -200,10 +200,15 @@ class RateLimiter:
 class BinanceRestAdapter:
     """Binance Futures REST API adapter."""
     
-    def __init__(self, config: BinanceConfig):
+    def __init__(
+        self, 
+        config: BinanceConfig,
+        rate_limiter: Optional[Any] = None,
+    ):
         self.config = config
         self.session: Optional[aiohttp.ClientSession] = None
-        self.rate_limiter = RateLimiter(
+        # Use injected rate_limiter or create internal one as fallback
+        self.rate_limiter = rate_limiter or RateLimiter(
             max_per_minute=config.max_weight_per_minute,
             max_per_second=config.max_orders_per_second,
         )
@@ -248,7 +253,13 @@ class BinanceRestAdapter:
         signed: bool = False,
         weight: int = 1,
     ) -> Any:
-        await self.rate_limiter.acquire(weight)
+        # Use injected rate limiter (MultiLimitRateLimiter) or internal fallback
+        if hasattr(self.rate_limiter, 'acquire_for_endpoint'):
+            # Production MultiLimitRateLimiter
+            await self.rate_limiter.acquire_for_endpoint(endpoint, weight)
+        else:
+            # Internal RateLimiter fallback
+            await self.rate_limiter.acquire(weight)
         
         url = f"{self.config.base_url}{endpoint}"
         headers = self._headers()
