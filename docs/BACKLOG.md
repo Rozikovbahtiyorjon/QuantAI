@@ -46,6 +46,7 @@
 - [ ] MC/Stress скоры в Tournament (хуки 0.5 нейтральные готовы)
 - [ ] Entry Engine (EV-гейт + Setup/Trigger/TTL + maker-зоны) — см. ADR-0004, только как кандидаты банка
 - [ ] **Мартингейл/усреднение — только experimental с Hard Stop**: `AveragingEngine` max 2 шага ×1.5, aggregate SL на весь пакет, риск пакета ≤20% от 40% резерва (≤8% депозита), gate `/stress-test -20% + лаг API + активная сетка` обязателен, дефолт OFF, never в автономном ядре
+- [ ] **Флэт-тайм-аут дефолт 60**: `ExitPolicy(time_exit_bars=60)` для флэт-режима (`atr_percentile<20` или `adx<18` + диапазон <0.5×ATR N баров) — высвобождение капитала для ротации, single-asset 1h ≈2.5 дня
 
 ## Известные ограничения (не баги)
 - OrderFlowGate получает None в оффлайн-режимах (нет L2-истории) — активировать после data-infra
