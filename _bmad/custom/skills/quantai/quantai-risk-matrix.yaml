@@ -1,0 +1,220 @@
+# QuantAI Risk Matrix Skill
+# Builds comprehensive risk matrices including VaR, ES, correlation matrices, stress tests, and tail-risk scenarios
+
+metadata:
+  name: "QuantAI Risk Matrix"
+  category: "quantai"
+  phase: "risk"
+  required: true
+  version: "1.0.0"
+  author: "QuantAI Team"
+  description: |
+    Builds comprehensive risk matrices including VaR, ES, correlation matrices,
+    stress tests, and tail-risk scenarios. Essential for risk management
+    and capital allocation decisions.
+
+inputs:
+  - name: "returns"
+    type: "DataFrame"
+    description: "Strategy returns (or asset returns for portfolio)"
+    required: true
+  - name: "positions"
+    type: "DataFrame"
+    description: "Current positions with sizes and entry prices"
+    required: false
+  - name: "benchmark_returns"
+    type: "Series"
+    description: "Benchmark returns for beta calculation"
+    required: false
+  - name: "confidence_levels"
+    type: "list"
+    description: "Confidence levels for VaR/ES"
+    required: false
+    default: [0.95, 0.99, 0.999]
+  - name: "lookback_window"
+    type: "int"
+    description: "Lookback window for covariance estimation"
+    required: false
+    default: 252
+  - name: "method"
+    type: "string"
+    description: "VaR/ES calculation method"
+    required: false
+    default: "historical"
+
+var_methods:
+  historical:
+    description: "Historical simulation (non-parametric)"
+    pros: ["No distribution assumptions", "Captures fat tails"]
+    cons: ["Slow to react to regime changes", "Requires long history"]
+  
+  parametric:
+    description: "Parametric (normal/t-distribution)"
+    pros: ["Fast", "Smooth estimates"]
+    cons: ["Underestimates tail risk", "Normality assumption"]
+  
+  monte_carlo:
+    description: "Monte Carlo simulation"
+    pros: ["Flexible distributions", "Path-dependent"]
+    cons: ["Computational cost", "Model risk"]
+  
+  ewma:
+    description: "Exponentially weighted moving average"
+    pros: ["Adapts to volatility changes", "Standard in risk mgmt"]
+    cons: ["Lambda choice subjective"]
+  
+  garch:
+    description: "GARCH volatility model"
+    pros: ["Captures vol clustering", "Mean reversion"]
+    cons: ["Model risk", "Parameter estimation"]
+
+outputs:
+  - name: "var_matrix"
+    type: "DataFrame"
+    description: "VaR at multiple confidence levels and horizons"
+    columns: ["confidence", "horizon", "var_pct", "var_abs"]
+  
+  - name: "es_matrix"
+    type: "DataFrame"
+    description: "Expected Shortfall at multiple confidence levels"
+    columns: ["confidence", "horizon", "es_pct", "es_abs"]
+  
+  - name: "correlation_matrix"
+    type: "DataFrame"
+    description: "Asset correlation matrix (Pearson/Spearman)"
+    index: "asset"
+    columns: "asset"
+  
+  - name: "covariance_matrix"
+    type: "DataFrame"
+    description: "Covariance matrix for portfolio optimization"
+    index: "asset"
+    columns: "asset"
+  
+  - name: "stress_test_results"
+    type: "DataFrame"
+    description: "Portfolio PnL under various stress scenarios"
+    columns: ["scenario", "portfolio_pnl", "max_drawdown", "recovery_days"]
+  
+  - name: "tail_risk_metrics"
+    type: "dict"
+    description: "Tail risk measures"
+    keys: ["skewness", "kurtosis", "jarque_bera_pvalue", "max_drawdown", "calmar_ratio", "tail_ratio"]
+  
+  - name: "risk_budget"
+    type: "DataFrame"
+    description: "Risk budget allocation per asset/strategy"
+    columns: ["asset", "risk_contribution", "risk_budget_pct", "marginal_var"]
+
+stress_scenarios:
+  - name: "covid_crash"
+    description: "COVID-19 March 2020 style crash"
+    shocks:
+      equity: -0.35
+      crypto: -0.50
+      correlation: 0.90
+      volatility: 3.0
+  
+  - name: "flash_crash"
+    description: "Flash crash (May 2010 style)"
+    shocks:
+      equity: -0.10
+      crypto: -0.20
+      correlation: 0.50
+      volatility: 2.0
+      duration_minutes: 30
+  
+  - name: "crypto_winter"
+    description: "Extended bear market (2018/2022 style)"
+    shocks:
+      crypto: -0.75
+      correlation: 0.85
+      volatility: 2.5
+      duration_days: 180
+  
+  - name: "regulation_shock"
+    description: "Regulatory crackdown (China ban style)"
+    shocks:
+      crypto: -0.30
+      correlation: 0.70
+      volatility: 1.5
+  
+  - name: "liquidity_crisis"
+    description: "Exchange liquidity dry-up"
+    shocks:
+      bid_ask_spread: 10.0
+      volume: 0.10
+      slippage: 5.0
+  
+  - name: "stablecoin_depeg"
+    description: "Major stablecoin de-pegging"
+    shocks:
+      stablecoin: -0.20
+      crypto: -0.15
+      correlation: 0.60
+
+outputs_format:
+  var_matrix:
+    index: ["confidence", "horizon"]
+    columns: ["var_pct", "var_abs"]
+    dtypes: ["float64", "float64"]
+  
+  correlation_matrix:
+    index: "asset"
+    columns: "asset"
+    dtype: "float64"
+    properties: ["symmetric", "diagonal=1.0", "positive_semidefinite"]
+  
+  stress_test_results:
+    columns: ["scenario", "portfolio_pnl", "max_drawdown", "recovery_days", "var_breach"]
+    dtypes: ["string", "float64", "float64", "int", "bool"]
+
+risk_limits:
+  max_portfolio_var_95_1d: 0.03
+  max_portfolio_var_99_1d: 0.05
+  max_position_var_95_1d: 0.01
+  max_correlation: 0.80
+  max_concentration: 0.30
+  min_liquidity_days: 5
+
+execution:
+  command: "uv run python -m src.risk_matrix --returns {returns} --positions {positions}"
+  timeout: 300
+  retries: 1
+  requirements:
+    - "pandas"
+    - "numpy"
+    - "scipy"
+    - "cvxpy"
+    - "arch"
+
+validation:
+  - name: "var_es_consistency"
+    check: "ES >= VaR for all confidence levels"
+    error: "ES must be >= VaR"
+  - name: "correlation_matrix_valid"
+    check: "positive_semidefinite and diagonal=1"
+    error: "Invalid correlation matrix"
+  - name: "var_monotonic"
+    check: "VaR increases with confidence level"
+    error: "VaR not monotonic"
+  - name: "stress_test_reasonable"
+    check: "stress_pnl > -1.0 (not total loss)"
+    error: "Unrealistic stress scenario"
+  - name: "risk_budget_sum"
+    check: "sum(risk_budget_pct) ≈ 1.0"
+    error: "Risk budget doesn't sum to 100%"
+
+examples:
+  - description: "Build risk matrix for multi-asset portfolio"
+    inputs:
+      returns: "portfolio_returns"
+      positions: "current_positions"
+      confidence_levels: [0.95, 0.99, 0.999]
+    expected_outcome: "Complete risk matrix with VaR, ES, correlations, stress tests"
+
+notes: |
+  This skill is MANDATORY for risk management and capital allocation.
+  Run after backtest validation and before paper trading.
+  Results directly feed into position sizing and capital allocation.
+  Stress scenarios should be reviewed quarterly and updated for current market conditions.

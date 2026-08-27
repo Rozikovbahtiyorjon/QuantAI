@@ -1,0 +1,294 @@
+{
+  "dashboard": {
+    "title": "QuantAI Testnet Trading Dashboard",
+    "tags": ["quantai", "trading", "testnet"],
+    "timezone": "utc",
+    "refresh": "10s",
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "panels": [
+      {
+        "title": "Account Balance",
+        "type": "stat",
+        "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
+        "targets": [
+          {
+            "expr": "quantai_balance_usdt",
+            "legendFormat": "Balance",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "currencyUSD",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"color": "red", "value": null},
+                {"color": "yellow", "value": 5000},
+                {"color": "green", "value": 10000}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "Daily P&L",
+        "type": "stat",
+        "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4},
+        "targets": [
+          {
+            "expr": "quantai_pnl_daily",
+            "legendFormat": "Daily P&L",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "currencyUSD",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"color": "red", "value": null},
+                {"color": "green", "value": 0}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "Win Rate",
+        "type": "gauge",
+        "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4},
+        "targets": [
+          {
+            "expr": "quantai_win_rate",
+            "legendFormat": "Win Rate",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "min": 0,
+            "max": 100,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"color": "red", "value": null},
+                {"color": "yellow", "value": 40},
+                {"color": "green", "value": 55}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "Open Positions",
+        "type": "stat",
+        "gridPos": {"x": 18, "y": 0, "w": 6, "h": 4},
+        "targets": [
+          {
+            "expr": "quantai_open_positions",
+            "legendFormat": "Open Positions",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "title": "Balance History",
+        "type": "timeseries",
+        "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "quantai_balance_usdt",
+            "legendFormat": "Balance",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "currencyUSD",
+            "color": {"mode": "palette-classic"}
+          }
+        }
+      },
+      {
+        "title": "P&L Over Time",
+        "type": "timeseries",
+        "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "quantai_pnl_cumulative",
+            "legendFormat": "Cumulative P&L",
+            "refId": "A"
+          },
+          {
+            "expr": "quantai_pnl_daily",
+            "legendFormat": "Daily P&L",
+            "refId": "B"
+          }
+        ]
+      },
+      {
+        "title": "Win Rate Over Time",
+        "type": "timeseries",
+        "gridPos": {"x": 0, "y": 12, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "quantai_win_rate",
+            "legendFormat": "Win Rate %",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "title": "Open Positions Detail",
+        "type": "table",
+        "gridPos": {"x": 12, "y": 12, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "quantai_open_positions_detail",
+            "format": "table",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "showHeader": true
+        }
+      },
+      {
+        "title": "Trades Distribution",
+        "type": "piechart",
+        "gridPos": {"x": 0, "y": 20, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "quantai_trades_total",
+            "legendFormat": "{{result}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "title": "P&L Distribution",
+        "type": "histogram",
+        "gridPos": {"x": 12, "y": 20, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "quantai_pnl_distribution",
+            "legendFormat": "P&L",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "title": "ML Model Performance",
+        "type": "stat",
+        "gridPos": {"x": 0, "y": 28, "w": 6, "h": 4},
+        "targets": [
+          {
+            "expr": "quantai_ml_balanced_accuracy",
+            "legendFormat": "Balanced Accuracy",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percentunit",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"color": "red", "value": null},
+                {"color": "yellow", "value": 50},
+                {"color": "green", "value": 60}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "ML F1 Score",
+        "type": "stat",
+        "gridPos": {"x": 6, "y": 28, "w": 6, "h": 4},
+        "targets": [
+          {
+            "expr": "quantai_ml_f1_score",
+            "legendFormat": "F1 Score",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percentunit",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"color": "red", "value": null},
+                {"color": "yellow", "value": 0.3},
+                {"color": "green", "value": 0.5}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "Active Positions",
+        "type": "stat",
+        "gridPos": {"x": 12, "y": 28, "w": 6, "h": 4},
+        "targets": [
+          {
+            "expr": "quantai_open_positions",
+            "legendFormat": "Active",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "title": "Risk Metrics",
+        "type": "stat",
+        "gridPos": {"x": 18, "y": 28, "w": 6, "h": 4},
+        "targets": [
+          {
+            "expr": "quantai_risk_drawdown_pct",
+            "legendFormat": "Drawdown %",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"color": "green", "value": null},
+                {"color": "yellow", "value": 5},
+                {"color": "red", "value": 10}
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "templating": {
+      "list": [
+        {
+          "name": "symbol",
+          "type": "query",
+          "query": "label_values(quantai_balance_usdt, symbol)",
+          "refresh": 1,
+          "includeAll": false,
+          "multi": false,
+          "current": {"text": "BTCUSDT", "value": "BTCUSDT"}
+        }
+      ]
+    }
+  },
+  "version": 1
+}

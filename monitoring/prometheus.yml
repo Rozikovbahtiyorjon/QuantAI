@@ -1,0 +1,111 @@
+# =========================================================
+# Prometheus Configuration for QuantAI Testnet
+# =========================================================
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'quantai-testnet'
+    environment: 'testnet'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - 'alertmanager:9093'
+
+# Rule files
+rule_files:
+  - '/etc/prometheus/rules/*.yml'
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # QuantAI Application Metrics
+  - job_name: 'quantai'
+    static_configs:
+      - targets: ['quantai-testnet:9090']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Binance API Latency
+  - job_name: 'binance-api'
+    static_configs:
+      - targets: ['quantai-testnet:9090']
+    metrics_path: '/metrics/binance'
+    scrape_interval: 30s
+
+  # Binance WebSocket
+  - job_name: 'binance-websocket'
+    static_configs:
+      - targets: ['quantai-testnet:9090']
+    metrics_path: '/metrics/ws'
+    scrape_interval: 30s
+
+  # Paper Trading Engine
+  - job_name: 'paper-trading'
+    static_configs:
+      - targets: ['quantai-testnet:9090']
+    metrics_path: '/metrics/paper'
+    scrape_interval: 15s
+
+  # ML Engine
+  - job_name: 'ml-engine'
+    static_configs:
+      - targets: ['quantai-testnet:9090']
+    metrics_path: '/metrics/ml'
+    scrape_interval: 60s
+
+  # Risk Management
+  - job_name: 'risk-management'
+    static_configs:
+      - targets: ['quantai-testnet:9090']
+    metrics_path: '/metrics/risk'
+    scrape_interval: 15s
+
+  # Execution Engine
+  - job_name: 'execution-engine'
+    static_configs:
+      - targets: ['quantai-testnet:9090']
+    metrics_path: '/metrics/execution'
+    scrape_interval: 15s
+
+  # Reconciliation Engine
+  - job_name: 'reconciliation'
+    static_configs:
+      - targets: ['quantai-testnet:9090']
+    metrics_path: '/metrics/reconciliation'
+    scrape_interval: 30s
+
+  # Paper Trading Engine
+  - job_name: 'paper-trading-engine'
+    static_configs:
+      - targets: ['quantai-testnet:9090']
+    metrics_path: '/metrics/paper-engine'
+    scrape_interval: 15s
+
+  # Redis
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis:6379']
+
+  # PostgreSQL
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres:5432']
+
+  # Node Exporter (Host Metrics)
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['host.docker.internal:9100']
+
+  # cAdvisor (Container Metrics)
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['host.docker.internal:8080']

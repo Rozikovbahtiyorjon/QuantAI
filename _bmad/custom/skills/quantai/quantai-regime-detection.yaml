@@ -1,0 +1,163 @@
+# QuantAI Regime Detection Skill
+# Detects market regimes (trend, mean-reversion, high-vol, low-vol) using HMM, volatility clustering, and macro indicators
+
+metadata:
+  name: "QuantAI Regime Detection"
+  category: "quantai"
+  phase: "research"
+  required: true
+  version: "1.0.0"
+  author: "QuantAI Team"
+  description: |
+    Detects market regimes (trend, mean-reversion, high-vol, low-vol) using
+    Hidden Markov Models, volatility clustering, macro indicators, and 
+    microstructure features. Critical for regime-aware strategy generation.
+
+inputs:
+  - name: "data"
+    type: "DataFrame"
+    description: "Prepared market data with indicators"
+    required: true
+  - name: "symbol"
+    type: "string"
+    description: "Trading symbol"
+    required: true
+  - name: "lookback_window"
+    type: "int"
+    description: "Lookback window for regime detection"
+    required: false
+    default: 200
+  - name: "methods"
+    type: "list"
+    description: "Detection methods to use"
+    required: false
+    default: ["hmm", "volatility_clustering", "trend_strength", "macro"]
+
+regime_types:
+  - name: "trend_bull"
+    description: "Strong upward trend with momentum"
+    conditions:
+      - "adx > 25"
+      - "ema_fast > ema_slow > ema_trend"
+      - "close > ema_trend"
+      - "macd > macd_signal"
+  
+  - name: "trend_bear"
+    description: "Strong downward trend with momentum"
+    conditions:
+      - "adx > 25"
+      - "ema_fast < ema_slow < ema_trend"
+      - "close < ema_trend"
+      - "macd < macd_signal"
+  
+  - name: "mean_reversion"
+    description: "Range-bound, oscillating market"
+    conditions:
+      - "adx < 20"
+      - "bb_width < 20th percentile"
+      - "rsi oscillating 30-70"
+      - "price near bb_middle"
+  
+  - name: "high_volatility"
+    description: "High volatility, unpredictable"
+    conditions:
+      - "atr_percentile > 80"
+      - "bb_width > 80th percentile"
+      - "returns_kurtosis > 5"
+  
+  - name: "low_volatility"
+    description: "Low volatility, calm market"
+    conditions:
+      - "atr_percentile < 20"
+      - "bb_width < 20th percentile"
+      - "returns_kurtosis < 3"
+
+methods:
+  hmm:
+    description: "Hidden Markov Model for regime classification"
+    parameters:
+      n_states: 4
+      covariance_type: "full"
+      n_iter: 100
+      random_state: 42
+    features:
+      - "log_returns"
+      - "realized_volatility"
+      - "volume_ratio"
+      - "trend_strength"
+  
+  volatility_clustering:
+    description: "GARCH-style volatility clustering detection"
+    method: "arch_test"
+    lookback: 100
+    significance: 0.05
+  
+  trend_strength:
+    description: "ADX-based trend strength measurement"
+    adx_period: 14
+    thresholds:
+      strong: 25
+      weak: 20
+  
+  macro:
+    description: "Macro regime indicators"
+    indicators:
+      - "btc_dominance"
+      - "eth_btc_ratio"
+      - "funding_rate"
+      - "oi_change"
+      - "funding_rate_zscore"
+
+outputs:
+  - name: "regime_labels"
+    type: "Series"
+    description: "Regime label for each timestamp"
+  - name: "regime_probabilities"
+    type: "DataFrame"
+    description: "Probability of each regime at each timestamp"
+  - name: "regime_stats"
+    type: "dict"
+    description: "Statistics per regime (duration, frequency, avg returns, volatility)"
+  - name: "transition_matrix"
+    type: "DataFrame"
+    description: "Regime transition probability matrix"
+
+outputs_format:
+  regime_labels:
+    dtype: "categorical"
+    categories: ["trend_bull", "trend_bear", "mean_reversion", "high_volatility", "low_volatility"]
+  regime_probabilities:
+    columns: ["trend_bull", "trend_bear", "mean_reversion", "high_volatility", "low_volatility"]
+    dtype: "float64"
+
+execution:
+  command: "uv run python -m src.regime_detection --data {data} --symbol {symbol}"
+  timeout: 300
+  retries: 1
+  requirements:
+    - "hmmlearn"
+    - "arch"
+    - "statsmodels"
+
+validation:
+  - name: "coverage_check"
+    description: "Ensure all timestamps labeled"
+    check: "regime_labels.notna().all()"
+  - name: "transition_realism"
+    description: "No impossible regime transitions"
+    check: "transition_matrix diagonal dominance"
+  - name: "minimum_duration"
+    description: "Regimes persist for minimum duration"
+    check: "min_regime_duration >= 3 bars"
+
+examples:
+  - description: "Detect regimes on BTC/USDT 15m"
+    inputs:
+      symbol: "BTC/USDT"
+      data: "prepared_data_with_indicators"
+    expected_outcome: "regime_labels with 5 regimes identified"
+
+notes: |
+  This skill is CRITICAL for regime-aware strategy generation.
+  Run after data validation and indicator calculation.
+  Results feed directly into regime-aware strategy architecture.

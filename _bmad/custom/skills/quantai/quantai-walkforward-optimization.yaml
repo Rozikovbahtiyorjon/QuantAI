@@ -1,0 +1,196 @@
+# QuantAI Walk-Forward Optimization Skill
+# Implements rigorous walk-forward validation with PurgedKFold CV, parameter stability analysis, and overfitting detection
+
+metadata:
+  name: "QuantAI Walk-Forward Optimization"
+  category: "quantai"
+  phase: "validation"
+  required: true
+  version: "1.0.0"
+  author: "QuantAI Team"
+  description: |
+    Implements rigorous walk-forward validation with PurgedKFold CV, 
+    parameter stability analysis, and overfitting detection.
+    Essential for robust strategy validation.
+
+inputs:
+  - name: "strategy_class"
+    type: "class"
+    description: "Strategy class to optimize"
+    required: true
+  - name: "data"
+    type: "DataFrame"
+    description: "Prepared data with features and targets"
+    required: true
+  - name: "param_grid"
+    type: "dict"
+    description: "Parameter grid for optimization"
+    required: true
+  - name: "train_size"
+    type: "int"
+    description: "Training window size (bars)"
+    required: false
+    default: 500
+  - name: "test_size"
+    type: "int"
+    description: "Test window size (bars)"
+    required: false
+    default: 100
+  - name: "step_size"
+    type: "int"
+    description: "Step size between windows"
+    required: false
+    default: 100
+  - name: "n_splits"
+    type: "int"
+    description: "Number of PurgedKFold splits"
+    required: false
+    default: 5
+  - name: "embargo_pct"
+    type: "float"
+    description: "Embargo percentage for PurgedKFold"
+    required: false
+    default: 0.01
+  - name: "purge_pct"
+    type: "float"
+    description: "Purge percentage for PurgedKFold"
+    required: false
+    default: 0.0
+  - name: "objective"
+    type: "string"
+    description: "Optimization objective"
+    required: false
+    default: "sharpe"
+  - name: "n_jobs"
+    type: "int"
+    description: "Parallel jobs"
+    required: false
+    default: -1
+
+walkforward_config:
+  cv_type: "purged"
+  n_splits: 5
+  embargo_pct: 0.01
+  purge_pct: 0.0
+  n_test_folds: 2
+
+optimization:
+  method: "bayesian"
+  n_trials: 100
+  timeout: 3600
+  sampler: "tpe"
+  pruner: "median"
+
+parameter_stability:
+  enabled: true
+  metrics:
+    - "cv_sharpe_mean"
+    - "cv_sharpe_std"
+    - "cv_balanced_accuracy"
+    - "cv_f1"
+    - "param_stability_cv"
+  thresholds:
+    param_stability_cv: 0.3
+    cv_sharpe_std: 0.5
+    cv_balanced_accuracy_min: 0.52
+
+overfitting_detection:
+  enabled: true
+  methods:
+    - name: "in_sample_vs_oos"
+      description: "Compare in-sample vs out-of-sample performance"
+      threshold: "oos_sharpe >= 0.5 * is_sharpe"
+    - name: "parameter_stability"
+      description: "Parameter values stable across windows"
+      check: "param_cv < 0.3"
+    - name: "performance_decay"
+      description: "Performance not decaying over time"
+      check: "oos_sharpe_trend >= -0.1"
+    - name: "trade_count_stability"
+      description: "Trade count stable across windows"
+      check: "trade_count_cv < 0.5"
+
+outputs:
+  - name: "walkforward_results"
+    type: "dict"
+    description: "Complete walk-forward results per window"
+  - name: "best_params_per_window"
+    type: "DataFrame"
+    description: "Best parameters per walk-forward window"
+  - name: "oos_metrics"
+    type: "DataFrame"
+    description: "Out-of-sample metrics per window"
+  - name: "aggregated_metrics"
+    type: "dict"
+    description: "Aggregated OOS metrics with confidence intervals"
+  - name: "stability_report"
+    type: "dict"
+    description: "Parameter stability and overfitting analysis"
+  - name: "best_params_global"
+    type: "dict"
+    description: "Globally optimal parameters (median of window bests)"
+
+stability_metrics:
+  - "param_cv": "coefficient of variation of parameter values across windows"
+  - "cv_sharpe_mean": "mean of CV Sharpe ratios"
+  - "cv_sharpe_std": "std of CV Sharpe ratios"
+  - "cv_balanced_accuracy": "mean balanced accuracy"
+  - "cv_f1": "mean F1 score"
+  - "oos_sharpe": "out-of-sample Sharpe ratio"
+  - "oos_sharpe_trend": "linear trend of OOS Sharpe over time"
+
+outputs_format:
+  walkforward_results:
+    type: "list"
+    items:
+      - "window_id"
+      - "train_start"
+      - "train_end"
+      - "test_start"
+      - "test_end"
+      - "best_params"
+      - "cv_metrics"
+      - "oos_metrics"
+      - "n_trades"
+      - "best_score"
+
+execution:
+  command: "uv run python -m src.walkforward_optimization --strategy {strategy_class} --data {data} --param-grid {param_grid}"
+  timeout: 7200
+  retries: 0
+  requirements:
+    - "optuna"
+    - "scikit-learn"
+    - "pandas"
+    - "numpy"
+
+validation:
+  - name: "minimum_windows"
+    check: "n_windows >= 10"
+    error: "Need at least 10 walk-forward windows for statistical validity"
+  - name: "oos_profitable"
+    check: "oos_sharpe_mean > 0"
+    error: "Strategy not profitable out-of-sample"
+  - name: "stability_passed"
+    check: "param_stability_cv < 0.3 and cv_sharpe_std < 0.5"
+    error: "Parameters not stable across windows"
+  - name: "no_overfitting"
+    check: "oos_sharpe >= 0.5 * is_sharpe"
+    error: "Significant overfitting detected"
+
+examples:
+  - description: "Walk-forward optimization for mean reversion strategy"
+    inputs:
+      strategy_class: "MeanReversionStrategy"
+      data: "prepared_data"
+      param_grid:
+        lookback: "[10, 20, 30, 40, 50]"
+        entry_z: "[1.5, 2.0, 2.5, 3.0]"
+        exit_z: "[0.5, 1.0, 1.5]"
+    expected_outcome: "walkforward_results with stable params and positive OOS Sharpe"
+
+notes: |
+  This skill is MANDATORY for validation phase.
+  Uses PurgedKFold CV to prevent look-ahead bias.
+  Parameter stability analysis prevents overfitting.
+  Results feed directly into paper trading gate.

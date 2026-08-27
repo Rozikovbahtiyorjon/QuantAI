@@ -81,7 +81,7 @@ def test_preflight_passes_with_ready_result():
 
     assert result.mode is RuntimeMode.PAPER
 
-    assert result.checks_passed == 2
+    assert result.checks_passed == 4
 
     assert result.checks_failed == 0
 

@@ -1,0 +1,185 @@
+# Team / enterprise overrides for _bmad/config.toml.
+# Committed to the repo -> applies to every developer on the project.
+# Tables deep-merge over base config; keyed entries merge by key.
+# Example: override an agent descriptor, or add a new agent.
+#
+# [agents.bmad-agent-pm]
+# description = "Prefers short, bulleted PRDs over narrative drafts."
+
+# ============================================================================
+# QuantAI Specialist Agents - Custom Agents for AI Trading Platform
+# ============================================================================
+
+[agents.quant-researcher]
+name = "Quant Researcher"
+role = "Quantitative Researcher"
+description = "Specializes in market microstructure analysis, factor research, and alpha signal generation. Expert in statistical arbitrage, market regime detection, and feature engineering for crypto markets."
+specialties = ["Market Microstructure", "Alpha Research", "Statistical Arbitrage", "Regime Detection", "Feature Engineering"]
+tools = ["python", "jupyter", "sql", "redis", "postgres"]
+persona = "Data-driven, skeptical of overfitting, rigorous statistical validation"
+
+[agents.quant-engineer]
+name = "Quant Engineer"
+role = "Senior Python Developer / Quant Engineer"
+description = "Builds production-grade trading infrastructure. Expert in low-latency systems, exchange integrations, and robust order execution. Ensures code quality, testing, and deployment reliability."
+specialties = ["Low-latency Systems", "Exchange Integration", "Order Management", "Risk Controls", "CI/CD"]
+tools = ["python", "rust", "cpp", "docker", "k8s", "grpc", "protobuf"]
+persona = "Engineering-first, reliability-obsessed, latency-aware"
+
+[agents.portfolio-manager]
+name = "Portfolio Manager"
+role = "Portfolio Manager / Risk Manager"
+description = "Manages capital allocation, position sizing, and portfolio-level risk. Expert in multi-asset risk models, correlation management, and capital efficiency. Ensures survival and consistent returns."
+specialties = ["Portfolio Optimization", "Risk Budgeting", "Correlation Management", "Capital Allocation", "Drawdown Control"]
+tools = ["python", "cvxpy", "riskfolio-lib", "pandas", "numpy"]
+persona = "Capital-preservation-first, risk-adjusted-return-focused, disciplined"
+
+[agents.ml-engineer]
+name = "ML Engineer"
+role = "Machine Learning Engineer"
+description = "Builds and maintains ML pipelines for trading signals. Expert in feature engineering, model training, validation, and deployment. Ensures model robustness, monitoring, and retraining pipelines."
+specialties = ["ML Pipeline", "Feature Engineering", "Model Validation", "Online Learning", "MLOps"]
+tools = ["python", "pytorch", "xgboost", "lightgbm", "optuna", "mlflow", "prefect"]
+persona = "Model-centric, validation-obsessed, production-ready"
+
+[agents.risk-manager]
+name = "Risk Manager"
+role = "Risk Manager / Compliance"
+description = "Monitors and enforces risk limits in real-time. Expert in VaR, stress testing, regulatory compliance, and tail-risk management. Implements kill switches and circuit breakers."
+specialties = ["Real-time Risk Monitoring", "VaR/ES Models", "Stress Testing", "Regulatory Compliance", "Tail Risk Hedging"]
+tools = ["python", "pandas", "numpy", "scipy", "prometheus", "grafana"]
+persona = "Conservative, vigilant, compliance-focused"
+
+
+# ============================================================================
+# Custom Skills for QuantAI
+# ============================================================================
+
+[skills.quantai-data-validation]
+name = "QuantAI Data Validation"
+description = "Validates market data quality, detects anomalies, and ensures data integrity for backtesting and live trading."
+category = "quantai"
+phase = "research"
+required = true
+
+[skills.quantai-regime-detection]
+name = "QuantAI Regime Detection"
+description = "Detects market regimes (trend, mean-reversion, high-vol, low-vol) using HMM, volatility clustering, and macro indicators."
+category = "quantai"
+phase = "research"
+required = true
+
+[skills.quantai-walkforward-optimization]
+name = "QuantAI Walk-Forward Optimization"
+description = "Implements rigorous walk-forward validation with PurgedKFold CV, parameter stability analysis, and overfitting detection."
+category = "quantai"
+phase = "validation"
+required = true
+
+[skills.quantai-risk-matrix]
+name = "QuantAI Risk Matrix"
+description = "Builds comprehensive risk matrices including VaR, ES, correlation matrices, stress tests, and tail-risk scenarios."
+category = "quantai"
+phase = "risk"
+required = true
+
+[skills.quantai-execution-analysis]
+name = "QuantAI Execution Analysis"
+description = "Analyzes execution quality: slippage, market impact, fill rates, timing costs. Integrates with microstructure data."
+category = "quantai"
+phase = "execution"
+required = false
+
+[skills.quantai-model-validation]
+name = "QuantAI Model Validation"
+description = "Rigorous model validation including PurgedKFold CV, probability calibration, feature stability, and out-of-sample testing."
+category = "quantai"
+phase = "validation"
+required = true
+
+[skills.quantai-regime-aware-strategy]
+name = "QuantAI Regime-Aware Strategy"
+description = "Generates regime-adaptive strategies that adapt signal generation, position sizing, and risk parameters to market conditions."
+category = "quantai"
+phase = "architecture"
+required = true
+
+
+# ============================================================================
+# Workflow Definition
+# ============================================================================
+
+[workflow.quantai]
+name = "QuantAI Development Workflow"
+description = "End-to-end workflow for QuantAI strategy development: Research -> Architecture -> Implementation -> Backtest -> Paper -> Live"
+phases = [
+    "research",
+    "architecture", 
+    "implementation",
+    "backtest",
+    "paper",
+    "live"
+]
+
+[workflow.quantai.phases.research]
+name = "Research"
+description = "Market research, data exploration, hypothesis generation, preliminary signal testing"
+agents = ["quant-researcher", "ml-engineer"]
+skills = ["quantai-data-validation", "quantai-regime-detection"]
+deliverables = ["research_notebook.md", "hypothesis.md", "preliminary_signals.ipynb"]
+gates = ["data_quality_check", "statistical_significance", "no_lookahead_bias"]
+
+[workflow.quantai.phases.architecture]
+name = "Architecture"
+description = "Strategy architecture design, regime-aware logic, risk parameter definition"
+agents = ["quant-researcher", "quant-engineer", "portfolio-manager", "risk-manager"]
+skills = ["quantai-regime-aware-strategy", "quantai-risk-matrix"]
+deliverables = ["architecture.md", "strategy_spec.md", "risk_matrix.yaml"]
+gates = ["regime_coverage_check", "risk_budget_approved", "architecture_review"]
+
+[workflow.quantai.phases.implementation]
+name = "Implementation"
+description = "Production-grade implementation with testing, logging, monitoring"
+agents = ["quant-engineer", "ml-engineer"]
+skills = ["quantai-model-validation"]
+deliverables = ["strategy.py", "tests/", "dockerfile", "monitoring/"]
+gates = ["code_review_passed", "unit_tests_pass", "integration_tests_pass"]
+
+[workflow.quantai.phases.backtest]
+name = "Backtest"
+description = "Rigorous walk-forward backtesting with PurgedKFold CV, out-of-sample validation"
+agents = ["quant-researcher", "ml-engineer", "risk-manager"]
+skills = ["quantai-walkforward-optimization", "quantai-model-validation", "quantai-risk-matrix"]
+deliverables = ["backtest_report.html", "walkforward_results.json", "validation_report.md"]
+gates = ["oos_sharpe > 1.0", "max_dd < 10%", "stability_check_passed"]
+
+[workflow.quantai.phases.paper]
+name = "Paper Trading"
+description = "Live paper trading on testnet with real market data, risk monitoring"
+agents = ["quant-engineer", "risk-manager", "portfolio-manager"]
+skills = ["quantai-execution-analysis", "quantai-risk-matrix"]
+deliverables = ["paper_trading_report.json", "execution_analysis.csv", "risk_dashboard/"]
+gates = ["30_days_min", "sharpe > 1.0", "max_dd < 8%", "execution_quality_passed"]
+
+[workflow.quantai.phases.live]
+name = "Live Trading"
+description = "Gradual capital deployment with real capital, full monitoring"
+agents = ["portfolio-manager", "risk-manager", "quant-engineer"]
+skills = ["quantai-risk-matrix", "quantai-execution-analysis"]
+deliverables = ["live_deployment_checklist.md", "ops_runbook.md", "incident_response_plan.md"]
+gates = ["capital_allocation_approved", "ops_readiness_check", "incident_response_ready"]
+
+
+# ============================================================================
+# Custom Output Locations
+# ============================================================================
+
+[output_locations.quantai]
+research = "{project_root}/_bmad-output/research"
+architecture = "{project_root}/_bmad-output/architecture"
+implementation = "{project_root}/_bmad-output/implementation"
+backtest = "{project_root}/_bmad-output/backtest"
+paper = "{project_root}/_bmad-output/paper"
+live = "{project_root}/_bmad-output/live"
+risk = "{project_root}/_bmad-output/risk"
+validation = "{project_root}/_bmad-output/validation"

@@ -1,0 +1,106 @@
+# QuantAI Data Validation Skill
+# Validates market data quality, detects anomalies, ensures data integrity
+
+metadata:
+  name: "QuantAI Data Validation"
+  category: "quantai"
+  phase: "research"
+  required: true
+  version: "1.0.0"
+  author: "QuantAI Team"
+  description: |
+    Validates market data quality, detects anomalies, and ensures data integrity
+    for backtesting and live trading. Critical first step in any QuantAI workflow.
+
+inputs:
+  - name: "data_source"
+    type: "DataFrame"
+    description: "Raw market data (OHLCV)"
+    required: true
+  - name: "symbol"
+    type: "string"
+    description: "Trading symbol (e.g., BTC/USDT)"
+    required: true
+  - name: "timeframe"
+    type: "string"
+    description: "Data timeframe (e.g., 15m, 1h, 1d)"
+    required: true
+  - name: "expected_frequency"
+    type: "string"
+    description: "Expected data frequency (pandas freq string)"
+    required: false
+    default: "15min"
+
+validation_checks:
+  - name: "schema_validation"
+    description: "Verify required columns exist with correct types"
+    severity: "error"
+    checks:
+      - "columns: timestamp, open, high, low, close, volume"
+      - "types: timestamp=datetime64, ohlcv=float64"
+      - "no_null_values in ohlcv"
+      - "timestamp monotonic increasing"
+      - "high >= max(open, close), low <= min(open, close)"
+
+  - name: "continuity_check"
+    description: "Detect gaps in time series"
+    severity: "warning"
+    checks:
+      - "max_gap <= 3 * expected_frequency"
+      - "missing_bars_count reported"
+      - "duplicate_timestamps = 0"
+
+  - name: "outlier_detection"
+    description: "Detect price/volume outliers using statistical methods"
+    severity: "warning"
+    methods:
+      - "zscore_threshold: 5.0"
+      - "iqr_multiplier: 3.0"
+      - "rolling_zscore_window: 100"
+    checks:
+      - "price_zscore <= threshold"
+      - "volume_zscore <= threshold"
+      - "returns_zscore <= threshold"
+
+  - name: "statistical_properties"
+    description: "Verify statistical properties match expectations"
+    severity: "info"
+    checks:
+      - "returns_stationarity: adf_test p-value < 0.05"
+      - "volatility_clustering: arch_test p-value < 0.05"
+      - "returns_distribution: not too far from normal (skew < 2, kurtosis < 10)"
+
+  - name: "cross_validation"
+    description: "Cross-validate against alternative data source if available"
+    severity: "info"
+    checks:
+      - "price_correlation_with_reference > 0.99"
+      - "volume_correlation_with_reference > 0.90"
+
+outputs:
+  - name: "validation_report"
+    type: "dict"
+    description: "Comprehensive validation report with pass/fail for each check"
+  - name: "cleaned_data"
+    type: "DataFrame"
+    description: "Data with anomalies flagged/removed based on severity"
+  - name: "anomalies"
+    type: "DataFrame"
+    description: "Detected anomalies with timestamps, types, and severity"
+
+execution:
+  command: "uv run python -m src.data_validation --symbol {symbol} --timeframe {timeframe}"
+  timeout: 300
+  retries: 1
+
+examples:
+  - description: "Validate BTC/USDT 15m data"
+    inputs:
+      symbol: "BTC/USDT"
+      timeframe: "15m"
+    expected_outcome: "validation_report with all checks passed"
+
+notes: |
+  This skill MUST be run before any research or backtesting.
+  Failed critical checks (severity=error) should halt the pipeline.
+  Warnings should be logged but not block the pipeline.
