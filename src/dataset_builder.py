@@ -74,6 +74,11 @@ class DatasetConfig:
     # Automatically calculate technical indicators.
     calculate_indicators: bool = True
 
+    # Feature Store auto-materialization
+    feature_store_enabled: bool = False
+    feature_store_view: str = "default"
+    feature_store_root: str = "data/feature_store"
+
 
 # ====================================================
 # DATASET BUILDER
@@ -105,6 +110,7 @@ class DatasetBuilder:
     def __init__(
         self,
         config: DatasetConfig | None = None,
+        feature_store=None,
     ) -> None:
 
         self.config = (
@@ -113,6 +119,8 @@ class DatasetBuilder:
         )
 
         self.dataset: List[dict] = []
+        self._feature_store = feature_store
+        self._last_materialized_version: int | None = None
 
     # ====================================================
     # RESET
@@ -529,7 +537,52 @@ class DatasetBuilder:
             )
         )
 
+        # ------------------------------------------------
+        # 6. Feature Store auto-materialization
+        # ------------------------------------------------
+        if self.config.feature_store_enabled:
+            self._materialize_to_store(dataset, df)
+
         return dataset
+
+    def _materialize_to_store(
+        self,
+        dataset: pd.DataFrame,
+        source_df: pd.DataFrame,
+    ) -> None:
+        """Persist dataset to Feature Store with lineage."""
+        try:
+            from src.feature_store import FeatureStore
+
+            store = self._feature_store
+            if store is None:
+                store = FeatureStore(self.config.feature_store_root)
+
+            lineage = {
+                "source_rows": len(source_df),
+                "future_bars": self.config.future_bars,
+                "target_profit": self.config.target_profit,
+                "warmup_bars": self.config.warmup_bars,
+                "dataset_rows": len(dataset),
+                "columns": list(dataset.columns),
+            }
+            result = store.materialize(
+                self.config.feature_store_view, dataset, lineage=lineage
+            )
+            self._last_materialized_version = result["version"]
+
+            # Log drift vs previous if available
+            if result.get("drift_vs_previous"):
+                drifted = sum(
+                    1 for r in result["drift_vs_previous"] if r.get("drifted")
+                )
+                if drifted > 0:
+                    print(
+                        f"[FeatureStore] v{result['version']} drift detected: "
+                        f"{drifted}/{len(result['drift_vs_previous'])} features"
+                    )
+        except Exception as e:
+            print(f"[FeatureStore] materialization failed: {e}")
 
     # ====================================================
     # STATISTICS
