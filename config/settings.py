@@ -129,6 +129,8 @@ class MLSettings(BaseSettings):
     n_splits: int = 5
     embargo_pct: float = 0.01
     purge_pct: float = 0.0
+    regime_aware: bool = False
+    regime_min_samples: int = 150
     n_test_folds: int = 2
 
     # ML Engine config

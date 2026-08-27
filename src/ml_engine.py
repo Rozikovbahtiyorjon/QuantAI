@@ -90,6 +90,10 @@ class MLConfig:
     n_splits: int = 5
     embargo_pct: float = 0.01        # Gap between train/test (1% of samples)
     purge_pct: float = 0.0           # Remove overlapping labels
+
+    # Regime-aware heads
+    regime_aware: bool = False
+    regime_min_samples: int = 150
     n_test_folds: int = 2            # For combinatorial CV
 
 
