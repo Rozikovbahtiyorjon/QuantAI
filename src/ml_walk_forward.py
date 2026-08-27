@@ -86,6 +86,7 @@ def create_ml_train_callback(
     dataset_config: DatasetConfig,
     model_manager: Optional[ModelManager] = None,
     save_each_window: bool = True,
+    feature_store=None,
 ) -> TrainCallback:
     """
     Create a train_callback for WalkForwardEngine that:
@@ -112,10 +113,25 @@ def create_ml_train_callback(
     ) -> dict:
         # -------------------------------------------------
         # 1. BUILD DATASET FROM TRAIN WINDOW
+        #     (auto-materializes to Feature Store if enabled)
         # -------------------------------------------------
-        builder = DatasetBuilder(config=dataset_config)
+        # Per-window view for versioned tracking of walk-forward folds
+        per_window_config = dataset_config
+        if dataset_config.feature_store_enabled and feature_store is None:
+            # Clone config with window-specific view for versioning
+            from dataclasses import replace
+
+            per_window_config = replace(
+                dataset_config,
+                feature_store_view=f"{dataset_config.feature_store_view}_window_{window_id}",
+            )
+
+        builder = DatasetBuilder(
+            config=per_window_config, feature_store=feature_store
+        )
         
         # Build dataset - this adds indicators, features, targets
+        # and auto-materializes to Feature Store if enabled
         dataset = builder.build(train_df)
         
         if dataset.empty:
@@ -267,18 +283,21 @@ class MLWalkForwardEngine:
         dataset_config: Optional[DatasetConfig] = None,
         model_manager: Optional[ModelManager] = None,
         save_each_window: bool = True,
+        feature_store=None,
     ) -> None:
         self.ml_config = ml_config or MLConfig()
         self.dataset_config = dataset_config or DatasetConfig()
         self.model_manager = model_manager or ModelManager()
         self.save_each_window = save_each_window
+        self.feature_store = feature_store
         
-        # Create ML train callback
+        # Create ML train callback (with Feature Store versioning per fold)
         train_callback = create_ml_train_callback(
             ml_config=self.ml_config,
             dataset_config=self.dataset_config,
             model_manager=self.model_manager,
             save_each_window=save_each_window,
+            feature_store=feature_store,
         )
         
         # Create base engine with ML callback
@@ -423,6 +442,7 @@ def run_ml_walk_forward(
     initial_balance: float = 1000.0,
     ml_config: Optional[MLConfig] = None,
     dataset_config: Optional[DatasetConfig] = None,
+    feature_store=None,
 ) -> MLWalkForwardResult:
     """
     Convenience function for ML Walk-Forward.
@@ -442,6 +462,7 @@ def run_ml_walk_forward(
         initial_balance=initial_balance,
         ml_config=ml_config,
         dataset_config=dataset_config,
+        feature_store=feature_store,
     )
     
     result = engine.run(df)

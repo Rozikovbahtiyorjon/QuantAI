@@ -687,6 +687,11 @@ class WalkForwardEngine:
 
         backtest.minimum_rows = test_size
 
+        # Auto-add indicators if test data is raw OHLCV
+        if "atr" not in test_df.columns:
+            from src.indicators import add_indicators
+
+            test_df = add_indicators(test_df)
 
         backtest_result = backtest.run(
             test_df
