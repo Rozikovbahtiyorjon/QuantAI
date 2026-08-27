@@ -27,16 +27,19 @@
 - [ ] **Фундаментальный анализ**: RSS/News API (CryptoPanic, CoinDesk, CoinTelegraph) + календарь событий (CoinMarketCal); парсинг отчетов (10-Q/20-F для публичных компаний, on-chain treasury для протоколов). Нормализация → эмбеддинги → ежедневный вектор «фундаментальная сила».
 - [ ] **Сентимент-анализ (Social NLP)**: Twitter/X API v2 (filtered по кастомному списку влиятельных аккаунтов/ключевых слов), Reddit API (r/CryptoCurrency, r/Bitcoin, специфические сабреддиты), Telegram-каналы (через TDLib/bot) → очистка спама/ботов → sentiment score per symbol/день → интеграция в Feature Engine как доп. фича `sentiment_score`. LunarCrush API (Galaxy Score, AltRank) — опционально, если лимиты позволяют.
 - [ ] **Технический анализ расширенный**:
-    - Паттерны свечей (candle patterns library: engulfing, doji, hammer, harami, etc.) → binary features
-    - Price Action: структура рынка (HH/HL/LH/LL), order blocks, fair value gaps, breaker blocks
-    - Order Book / L2: микроструктурные фичи (bid-ask spread, order book imbalance, depth slope, microprice)
-    - L2 Data / Order Flow: cumulative delta, CVD, absorption, footprint clusters
-- [ ] **Деривативные метрики (On-chain + Exchange)**:
-    - Open Interest (OI) — агрегатный и по биржам/контрактам
-    - Funding Rate (8h) + предиктор next funding (basis)
-    - Liquidations (биржевые вебхуки/REST) — кластеризация ликвидаций по ценам
-    - Long/Short Ratio (accounts + positions) — top trader positions (Binance/Bybit API)
-    - Open Interest change rate (OI delta) + Funding Rate basis → basis trading signals
+    - Паттерны свечей (candle patterns: engulfing, doji, hammer, harami) → binary фичи
+    - Price Action: HH/HL/LH/LL, order blocks, fair value gaps, breaker blocks
+- [ ] **L2 / Order Book — для maker-исполнения (детально, после Long-Run гейта)**:
+    - WS `depth@100ms` + REST snapshot → локальный L2-кеш (`src/market_data/fanout.py` → `OrderBookMarketData`): bid/ask heaps, TTL 1с, sequence-gap handling (snapshot+delta), queue-position estimation
+    - Фичи: bid-ask spread, order book imbalance (OIB), depth slope, microprice
+    - Order Flow: cumulative delta (CVD), absorption, footprint-кластеры → `OrderFlowGate` (сейчас `None`, активировать после кэша)
+    - Тесты на исторических depth-снепшотах; метрика `order_book_imbalance` в Feature Engine
+- [ ] **Деривативы / Futures — как фичи (детально, после L2-кеша)**:
+    - Open Interest (OI): агрегатный + по биржам/контрактам — `fetchOpenInterest` (CCXT) + `GET /fapi/v1/openInterest` fallback; OI delta (1h/1d change rate)
+    - Funding Rate (8h) + предиктор next funding: `GET /fapi/v1/fundingRate` + `basis = (mark - index)/index`; `funding_basis` фича
+    - Liquidations: `forceOrder` stream (WS) + `GET /fapi/v1/allForceOrders` REST — кластеризация по ценам → `liquidation_clusters` фича
+    - Long/Short Ratio: `GET /futures/data/globalLongShortAccountRatio` + `topLongShortPositionRatio` — `long_short_ratio` фича
+    - Basis-сигналы: `oi_delta + funding_basis` → конкатенация в Feature Engine
 - [ ] Интеграция в Feature Engine: все выше → нормализованные признаки → конкатенация с core-индикаторами → выборка для ML/Strategies
 
 ## P2 — архитектурные долги
