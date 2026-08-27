@@ -104,8 +104,9 @@ class FeatureEngine:
     10. OI Delta - Open Interest delta per candle
     """
 
-    def __init__(self):
+    def __init__(self, live_logger=None):
         self.features = FeatureVector()
+        self.live_logger = live_logger
 
         # Microstructure Intelligence components
         self._vpin_calculator = VPINCalculator(bucket_volume=100.0, window_buckets=50)
@@ -324,6 +325,13 @@ class FeatureEngine:
         # Alternative Data
         self.calculate_alternative_data_features(row)
 
+        # Auto-log to Feature Store if live logger is attached (non-blocking)
+        if self.live_logger is not None:
+            try:
+                self.live_logger.log(self.features.to_dict())
+            except Exception:
+                pass  # never block feature generation
+
         return self.features
 
     def calculate_alternative_data_features(
@@ -353,14 +361,17 @@ class FeatureEngine:
 
 def build_features(
     df: pd.DataFrame,
+    live_logger=None,
 ) -> dict:
     """
     Быстрое построение Feature Vector.
 
     Возвращает обычный словарь.
+    Если передан live_logger, фичи автоматически логируются
+    в Feature Store (живой поток).
     """
 
-    engine = FeatureEngine()
+    engine = FeatureEngine(live_logger=live_logger)
 
     return engine.build(df).to_dict()
 
