@@ -46,17 +46,21 @@
 ## P1-portfolio — Диверсификация 60/40 для кросс-секционного брокера
 - [ ] **60% депозита / 40% резерв + 3–5% на актив**: `CrossSectionParams(reserve_ratio=0.40, max_position_pct=0.05)` → `per_name = equity*(1-reserve)/top_k` capped; `top_k=2` (30% — пометка «концентрированный») vs `top_k=12` (5% честный); weekly-оборот уже есть (142 ребаланса)
 
-## P2 — архитектурные долги
-- [ ] Портфельный брокер Long-Run провести через RiskOrchestrator/ExecutionBridge (сейчас собственный леджер с параметрическим риском)
-- [ ] WF-неймспейс: довести facades до полного отказа от корневых импортов в тестах
-- [ ] Regime-aware риск-слой для кросс-секционных кандидатов (де-риски с учётом фазы рынка)
-- [ ] MC/Stress скоры в Tournament (хуки 0.5 нейтральные готовы)
-- [ ] Entry Engine (EV-гейт + Setup/Trigger/TTL + maker-зоны) — см. ADR-0004, только как кандидаты банка
-- [ ] **Мартингейл/усреднение — только experimental с Hard Stop**: `AveragingEngine` max 2 шага ×1.5, aggregate SL на весь пакет, риск пакета ≤20% от 40% резерва (≤8% депозита), gate `/stress-test -20% + лаг API + активная сетка` обязателен, дефолт OFF, never в автономном ядре
-- [ ] **Hard Stop 10% портфеля / 25% флэт-тайм-аут**: `HardStopGuard` — принудительный flat всех позиций по DD от пика, независимо от усреднения; метрика `risk_kill_switch_active=1`, ручной reset; обязателен до live с плечом
-- [ ] **Авто-стейкинг (bet sizing)**: Kelly-fraction × confidence_score; `confidence≥0.8` → 3% риск, `0.6–0.8` → 1.5%, `<0.6` → 0.5%; `0.5%` минималка, кап 5% депозита на сделку
-- [ ] **Плечо авто 3/5/10/20/50×**: `LeverageSelector` в `RiskOrchestrator` — формула `floor(0.8*entry/(entry-SL))` clamped [3,5,10,20,50]; ликвидация ≥20% за стопом; кросс-маржа + STOP_MARKET reduceOnly; после R3-гейта
-- [ ] **P2-diversification: A(18 Binance) → B-1(3 криптобиржи) → B-2(PAXG/SPX via Alpaca)**: этап A (18 альтов, cross-sectional уже чемпион) валидируется; B-1 — redundancy + funding-basis (Binance+Bybit+OKX, один API CCXT); B-2 — первый кросс-актив через PAXG (золото на Binance, без новой биржи) и SPX (Alpaca/OANDA) для decorrelation
+## P5-AutoML — Самообучение / «Конструктор стратегий»
+
+- [ ] **StrategyComposer** (`src/auto_ml/strategy_composer.py`):
+    - `propose(market: MarketContext, constraints: Constraints) -> List[CandidateSpec]`
+    - 1. Retrieve relevant competences from StrategyBank (similar regime/assets)
+    - 2. Compose candidate genomes via genetic programming / Bayesian optimization
+    - 3. Return top-K CandidateSpec for ChampionPipeline evaluation
+- [ ] **Knowledge Graph** (`src/auto_ml/knowledge_graph.py`):
+    - Semantic links: "RSI<30 + TrendUp → BUY works on BTC 1h, not ETH 4h"
+    - Graph DB for transfer learning across assets/regimes
+- [ ] **Meta-Learning** (`src/auto_ml/meta_learner.py`):
+    - `ModelSelector` learns which genome works best on new asset/regime (few-shot adaptation)
+- [ ] **AutoML Pipeline** (orchestrator):
+    - Generate N candidates → ChampionPipeline evaluation → top-K → auto-push to StrategyBank
+    - Continuous learning loop: Live/Paper telemetry → Performance Feedback → Candidate stats → Mutation → Re-evaluation
 - [ ] **P2-diversification: A(18 Binance) → B-1(3 криптобиржи) → B-2(PAXG/SPX via Alpaca)**: этап A (18 альтов, cross-sectional уже чемпион) валидируется; B-1 — redundancy + funding-basis (Binance+Bybit+OKX, один API CCXT); B-2 — первый кросс-актив через PAXG (золото на Binance, без новой биржи) и SPX (Alpaca/OANDA) для decorrelation
 
 ## P2-aggressive — MAX-PROFIT пресет (изолированная ветка, вне 3-5-7)
