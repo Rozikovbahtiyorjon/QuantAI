@@ -124,8 +124,8 @@ class MLSettings(BaseSettings):
     ml_enabled: bool = False
     model_path: str = "models/quantai_v5.pkl"
 
-    # Purged K-Fold CV
-    cv_type: Literal["purged", "combinatorial"] = "purged"
+    # Purged K-Fold CV - combinatorial provides 10x more OOS paths (C5,2)
+    cv_type: Literal["purged", "combinatorial"] = "combinatorial"
     n_splits: int = 5
     embargo_pct: float = 0.01
     purge_pct: float = 0.0

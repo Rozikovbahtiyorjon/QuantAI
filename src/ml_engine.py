@@ -86,7 +86,7 @@ class MLConfig:
     use_class_weights: bool = True
 
     # Purged K-Fold parameters
-    cv_type: str = "purged"          # "purged" or "combinatorial"
+    cv_type: str = "combinatorial"          # "purged" or "combinatorial"
     n_splits: int = 5
     embargo_pct: float = 0.01        # Gap between train/test (1% of samples)
     purge_pct: float = 0.0           # Remove overlapping labels
