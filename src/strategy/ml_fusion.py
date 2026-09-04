@@ -17,7 +17,7 @@ from config.settings import settings
 class FusionConfig:
     """Configuration for AI+ML fusion rules."""
     
-    min_confidence: float = 60.0
+    min_confidence: float = 0.60
     ai_weight: float = 0.60
     ml_weight: float = 0.40
     conflict_penalty: float = 0.70
@@ -30,19 +30,28 @@ class FusionConfig:
     
     @classmethod
     def from_settings(cls) -> "FusionConfig":
+        # P1 FIX: Use canonical Settings path (fail-fast, no silent fallback)
+        # Previously used getattr(settings, "strategy_ai_weight", 0.60) which ignored settings.strategy.ai_weight
+        s = settings.strategy
+        # Handle legacy min_confidence stored as 60.0 (percent) vs 0.60 (decimal)
+        raw_conf = s.min_confidence
+        min_conf = raw_conf / 100.0 if raw_conf > 1.0 else raw_conf
         return cls(
-            min_confidence=getattr(settings, "strategy_min_confidence", 60.0),
-            ai_weight=getattr(settings, "strategy_ai_weight", 0.60),
-            ml_weight=getattr(settings, "strategy_ml_weight", 0.40),
-            conflict_penalty=getattr(settings, "strategy_conflict_penalty", 0.70),
-            ml_hold_blocks_ai=getattr(settings, "strategy_ml_hold_blocks_ai", True),
-            ai_hold_blocks_all=getattr(settings, "strategy_ai_hold_blocks_all", True),
+            min_confidence=min_conf,
+            ai_weight=s.ai_weight,
+            ml_weight=s.ml_weight,
+            conflict_penalty=s.conflict_penalty,
+            ml_hold_blocks_ai=s.ml_hold_blocks_ai,
+            ai_hold_blocks_all=s.ai_hold_blocks_all,
         )
 
 
 @dataclass
 class FusionResult:
-    """Result of AI+ML fusion."""
+    """Result of AI+ML fusion.
+    
+    All probability/confidence values are in [0, 1] range.
+    """
     
     signal: Literal["HOLD", "BUY", "SELL"]
     combined_confidence: float
@@ -86,11 +95,11 @@ class MLFusion:
         
         Args:
             ai_signal: AI decision (HOLD/BUY/SELL)
-            ai_confidence: AI confidence 0-100
+            ai_confidence: AI confidence 0-1
             ml_signal: ML prediction (HOLD/BUY/SELL)
-            ml_probability: ML max class probability 0-100
+            ml_probability: ML max class probability 0-1
         """
-        # Normalize
+        # Normalize - expect 0..1 inputs
         ai_signal = self._normalize(ai_signal)
         ml_signal = self._normalize(ml_signal)
         ai_conf = self._clamp(ai_confidence)
@@ -148,13 +157,13 @@ class MLFusion:
             
             return FusionResult(
                 signal=ai_signal,
-                combined_confidence=round(combined, 2),
+                combined_confidence=round(combined, 4),
                 approved=approved,
-                reason=f"ML confirms {ml_signal} ({ml_prob:.1f}%)",
+                reason=f"ML confirms {ml_signal} ({ml_prob:.1%})",
                 ai_signal=ai_signal,
-                ai_confidence=ai_conf,
+                ai_confidence=round(ai_conf, 4),
                 ml_signal=ml_signal,
-                ml_probability=ml_prob,
+                ml_probability=round(ml_prob, 4),
                 rule_applied="agreement",
             )
         
@@ -163,13 +172,13 @@ class MLFusion:
         
         return FusionResult(
             signal="HOLD",
-            combined_confidence=round(penalized, 2),
+            combined_confidence=round(penalized, 4),
             approved=False,
-            reason=f"Conflict: AI={ai_signal}, ML={ml_signal} (ML={ml_prob:.1f}%)",
+            reason=f"Conflict: AI={ai_signal}, ML={ml_signal} (ML={ml_prob:.1%})",
             ai_signal=ai_signal,
-            ai_confidence=ai_conf,
+            ai_confidence=round(ai_conf, 4),
             ml_signal=ml_signal,
-            ml_probability=ml_prob,
+            ml_probability=round(ml_prob, 4),
             rule_applied="conflict",
         )
     
@@ -190,16 +199,14 @@ class MLFusion:
     
     @staticmethod
     def _clamp(value: float) -> float:
-        """Clamp to [0, 100]."""
+        """Clamp to [0, 1]."""
         if value is None:
             return 0.0
         try:
             num = float(value)
         except (TypeError, ValueError):
             return 0.0
-        if 0.0 <= num <= 1.0:
-            num *= 100.0
-        return max(0.0, min(100.0, num))
+        return max(0.0, min(1.0, num))
 
 
 # Backward compatibility: standalone function
@@ -213,6 +220,7 @@ def fuse_ai_ml(
     """
     Backward compatibility wrapper for fuse_ai_ml.
     
+    Note: All probability/confidence values should be in [0, 1] range.
     Use MLFusion().fuse() for new code.
     """
     fusion = MLFusion(config)

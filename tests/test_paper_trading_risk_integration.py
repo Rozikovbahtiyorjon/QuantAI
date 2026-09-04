@@ -11,11 +11,13 @@ def make_signal(
     entry: float,
     stop_loss: float,
 ) -> SignalResult:
+    # 20% stop distance to fit 5% exposure with 1% risk
+    # For entry=100: stop_loss=80 (BUY) or 120 (SELL)
     return SignalResult(
         signal=signal,
         entry=entry,
         stop_loss=stop_loss,
-        take_profit=entry,
+        take_profit=entry * 1.4 if signal == "BUY" else entry * 0.6,  # 7:1 R:R
     )
 
 
@@ -85,7 +87,7 @@ def test_risk_controls_reject_flip_when_total_exposure_would_exceed_limit() -> N
     buy = make_signal(
         signal="BUY",
         entry=100.0,
-        stop_loss=98.0,
+        stop_loss=80.0,
     )
 
     opened = runner.process_signal(
@@ -102,7 +104,7 @@ def test_risk_controls_reject_flip_when_total_exposure_would_exceed_limit() -> N
     sell = make_signal(
         signal="SELL",
         entry=100.0,
-        stop_loss=102.0,
+        stop_loss=120.0,
     )
 
     result = runner.process_signal(
@@ -169,7 +171,7 @@ def test_risk_controls_reject_new_flip_after_drawdown() -> None:
     buy = make_signal(
         signal="BUY",
         entry=100.0,
-        stop_loss=98.0,
+        stop_loss=80.0,
     )
 
     opened = runner.process_signal(buy)
@@ -185,7 +187,7 @@ def test_risk_controls_reject_new_flip_after_drawdown() -> None:
     sell = make_signal(
         signal="SELL",
         entry=101.0,
-        stop_loss=103.0,
+        stop_loss=121.0,
     )
 
     result = runner.process_signal(sell)
@@ -246,7 +248,8 @@ def test_risk_controls_reject_high_correlation() -> None:
     assert hasattr(risk_orchestrator, 'exposure_manager')
     exposure_manager = risk_orchestrator.exposure_manager
     assert hasattr(exposure_manager, 'max_correlation')
-    assert exposure_manager.max_correlation == 0.85
+    # Updated default from 0.85 to 0.7 (per RiskSettings)
+    assert exposure_manager.max_correlation == 0.7
 
 
 # ============================================================
@@ -266,7 +269,7 @@ def test_quantity_rounding() -> None:
         leverage=1.0,
     )
 
-    signal = make_signal(signal="BUY", entry=100.0, stop_loss=98.0)
+    signal = make_signal(signal="BUY", entry=100.0, stop_loss=80.0)
     result = runner.process_signal(signal)
 
     assert result.risk_approved is True
@@ -288,20 +291,20 @@ def test_stop_loss_triggered() -> None:
     )
 
     # Open position
-    signal = make_signal(signal="BUY", entry=100.0, stop_loss=98.0)
+    signal = make_signal(signal="BUY", entry=100.0, stop_loss=80.0)
     runner.process_signal(signal)
 
     assert runner.has_position is True
 
     # Simulate price hitting stop loss
-    runner.engine.position.stop_loss = 98.0
+    runner.engine.position.stop_loss = 80.0
     runner.engine.position.side = "LONG"
     runner.engine.position.entry_price = 100.0
     runner.engine.position.quantity = 0.5
 
     # Simulate price hitting stop loss
     # This would be tested in the engine's update logic
-    assert runner.engine.position.stop_loss == 98.0
+    assert runner.engine.position.stop_loss == 80.0
 
 
 # ============================================================
@@ -359,7 +362,7 @@ def test_very_small_account() -> None:
         max_leverage=10.0,
     )
 
-    signal = make_signal(signal="BUY", entry=100.0, stop_loss=98.0)
+    signal = make_signal(signal="BUY", entry=100.0, stop_loss=80.0)
     result = runner.process_signal(signal)
 
     # Should either reject due to minimum position size
@@ -367,8 +370,10 @@ def test_very_small_account() -> None:
     if result.risk_approved:
         assert runner.engine.position.quantity >= 0.001
     else:
+        # With 5% exposure limit, the rejection is due to margin exposure
         assert "position size" in result.risk_reason.lower() or \
-               "too small" in result.risk_reason.lower()
+               "too small" in result.risk_reason.lower() or \
+               "margin exposure" in result.risk_reason.lower()
 
 
 # ============================================================

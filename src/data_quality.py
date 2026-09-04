@@ -179,6 +179,62 @@ def validate_ohlcv(
                 f"{rep.outliers_6sigma} return outliers beyond 6 sigma"
             )
 
+    # ---- 6. timezone (P2.9) ----
+    try:
+        # Must be UTC, timezone-aware
+        ts_tz = pd.to_datetime(df["timestamp"], utc=True)
+        # Check that conversion preserved UTC (no naive)
+        # If original was naive, utc=True localizes to UTC — we consider that pass but warn if original had no tz
+        # Detect naive by checking if original series had tz
+        orig = df["timestamp"]
+        # Try to infer if original had timezone
+        sample = orig.iloc[0] if len(orig) else None
+        if sample is not None:
+            try:
+                # If sample is string without TZ, to_datetime with utc will succeed but original was naive
+                # We check raw string for Z or +00:00
+                s = str(sample)
+                if "Z" not in s and "+" not in s and "UTC" not in s and pd.Timestamp(s).tz is None:
+                    # Naive timestamp — should be UTC but flagged as warning (Binance returns UTC)
+                    # For strict gate, we require UTC; naive is allowed if we convert, but report warning
+                    rep.warnings.append("timestamps were naive, converted to UTC")
+            except Exception:
+                pass
+        if ts_tz.dt.tz is None:
+            rep.passed = False
+            rep.errors.append("timezone: timestamps not timezone-aware (must be UTC)")
+    except Exception as e:
+        rep.passed = False
+        rep.errors.append(f"timezone check failed: {e}")
+
+    # ---- 7. exchange outages (P2.9) ----
+    try:
+        diffs = ts.diff().dropna()
+        if len(diffs):
+            # Determine expected interval
+            interval = diffs.mode().iloc[0] if len(diffs.mode()) else pd.Timedelta(hours=1)
+            outage_threshold = interval * 10
+            outages = diffs[diffs > outage_threshold]
+            if len(outages):
+                outage_pct = len(outages) / len(diffs) * 100
+                if outage_pct > 1.0:
+                    rep.passed = False
+                    rep.errors.append(f"exchange outages: {len(outages)} gaps >10*interval ({outage_threshold}) = {outage_pct:.2f}%")
+                else:
+                    rep.warnings.append(f"{len(outages)} potential outage gaps >10*interval")
+    except Exception as e:
+        rep.warnings.append(f"outage check warning: {e}")
+
+    # ---- 8. abnormal volume (P2.9) ----
+    try:
+        median_vol = v.median()
+        if median_vol > 0:
+            abnormal = int((v > median_vol * 10).sum())
+            if abnormal > len(df) * 0.01:
+                rep.warnings.append(f"abnormal volume: {abnormal} bars >10x median")
+    except Exception:
+        pass
+
     return rep
 
 

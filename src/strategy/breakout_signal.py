@@ -1,13 +1,22 @@
 """
-QuantAI Breakout Strategy (Phase 3B candidate)
+QuantAI Breakout Strategy — Setup + Trigger for breakout family (P3)
 
 Family: volatility breakout with trend filter (Donchian-style).
+This is ONE setup (LONG_BREAKOUT/SHORT_BREAKOUT) within the universal Setup Engine (src/strategy/setup_detector.py:SetupDetector),
+not the engine itself. SetupDetector handles LONG_PULLBACK/MEAN_REVERSION/LIQUIDITY_SWEEP etc.,
+while this generator implements the breakout-specific Setup+Trigger (Donchian + EMA alignment + ADX).
 
 Economic hypothesis (not curve-fit):
     Crypto trends persist after range expansions. Entering N-bar-high
     breakouts aligned with the higher-EMa trend, risking 3xATR and
     trailing the position, captures fat right tails while the exit
     engine caps left tails.
+
+Status: RESEARCH HYPOTHESIS — not real alpha until IS-OOS consistency proven.
+    Prior results: IS PF ~1.6 (good) → OOS PF ~0.9 (sharp deterioration).
+    IS != OOS => hypothesis only. Real alpha requires:
+      PF OOS/IS ≥0.60, deterioration ≤50%, PBO<0.6, cost robust, bootstrap p<0.05
+    enforced by ResearchIntegrityEngine IS-OOS gate.
 
 Causality guarantees:
     - Breakout level = rolling max/high of PRIOR bars (shift(1)).

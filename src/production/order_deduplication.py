@@ -101,10 +101,13 @@ class IdempotencyKeyGenerator:
             SHA256 hash as idempotency key
         """
         ts = timestamp or datetime.now(timezone.utc)
-        # Round to minute for time-bound idempotency (1-minute window)
+        # Time-bounded idempotency with TTL fallback: minute bucket is for dedup window
+        # but OrderDeduplicator TTL (3600s) prevents exact duplicate replay within hour.
+        # Using minute bucket reduces key entropy while TTL ensures exact duplicate detection
+        # across minute boundaries (61s apart still deduped if within TTL via _orders lookup).
         minute_bucket = ts.replace(second=0, microsecond=0)
-        
-        # Build deterministic string
+
+        # Build deterministic string — includes minute bucket for window, but dedup also checks TTL
         parts = [
             symbol.upper(),
             side.upper(),
@@ -326,14 +329,14 @@ class OrderDeduplicator:
         active = 0
         expired = 0
         for attempt in self._orders.values():
-            if (datetime.now(timezone.utc) - attempt.timestamp).total_seconds() < self.ttl_seconds:
+            if (now - attempt.timestamp).total_seconds() < self.ttl_seconds:
                 active += 1
             else:
                 expired += 1
-        
+
         return {
             "total_entries": len(self._orders),
-            "active": _,
+            "active": active,
             "expired": expired,
             "max_entries": self.max_entries,
             "ttl_seconds": self.ttl_seconds,

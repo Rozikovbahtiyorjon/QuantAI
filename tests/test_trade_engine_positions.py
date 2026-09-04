@@ -59,8 +59,8 @@ def make_candle(
 
 def make_long_signal(
     entry=100.0,
-    stop_loss=98.0,
-    take_profit=104.0,
+    stop_loss=80.0,   # 20% stop for 5% exposure with 1% risk
+    take_profit=140.0, # 40% target for 7:1 R:R
     confidence=70.0,
 ):
     """Create a BUY signal."""
@@ -78,8 +78,8 @@ def make_long_signal(
 
 def make_short_signal(
     entry=100.0,
-    stop_loss=102.0,
-    take_profit=96.0,
+    stop_loss=120.0,  # 20% stop for 5% exposure with 1% risk
+    take_profit=60.0,  # 40% target for 7:1 R:R
     confidence=70.0,
 ):
     """Create a SELL signal."""
@@ -147,9 +147,9 @@ def test_open_long_position():
 
     assert position.entry_price > 0
 
-    assert position.stop_loss == 98.0
+    assert position.stop_loss == 80.0
 
-    assert position.take_profit == 104.0
+    assert position.take_profit == 140.0
 
     assert position.quantity > 0
 
@@ -192,9 +192,9 @@ def test_open_short_position():
 
     assert position.entry_price > 0
 
-    assert position.stop_loss == 102.0
+    assert position.stop_loss == 120.0
 
-    assert position.take_profit == 96.0
+    assert position.take_profit == 60.0
 
     assert position.quantity > 0
 
@@ -348,8 +348,8 @@ def test_close_position_updates_balance_on_loss():
 
     signal = make_long_signal(
         entry=100.0,
-        stop_loss=98.0,
-        take_profit=104.0,
+        stop_loss=80.0,
+        take_profit=140.0,
     )
 
     engine.open_position(
@@ -361,15 +361,15 @@ def test_close_position_updates_balance_on_loss():
 
     candle_exit = make_candle(
         timestamp="2026-01-01 00:15:00",
-        close=98.0,
-        high=98.0,
-        low=97.5,
+        close=80.0,
+        high=80.0,
+        low=79.5,
     )
 
     engine.close_position(
         position,
         candle_exit,
-        98.0,
+        80.0,
         CloseReason.STOP_LOSS,
     )
 
@@ -399,8 +399,8 @@ def test_long_position_hits_take_profit():
 
     signal = make_long_signal(
         entry=100.0,
-        stop_loss=98.0,
-        take_profit=104.0,
+        stop_loss=80.0,
+        take_profit=140.0,
     )
 
     engine.open_position(
@@ -412,9 +412,9 @@ def test_long_position_hits_take_profit():
 
     candle = make_candle(
         timestamp="2026-01-01 00:15:00",
-        high=105.0,
-        low=103.0,
-        close=104.5,
+        high=141.0,
+        low=139.0,
+        close=140.5,
         atr=1.0,
     )
 
@@ -445,8 +445,8 @@ def test_long_position_hits_stop_loss():
 
     signal = make_long_signal(
         entry=100.0,
-        stop_loss=98.0,
-        take_profit=104.0,
+        stop_loss=80.0,
+        take_profit=140.0,
     )
 
     engine.open_position(
@@ -458,9 +458,9 @@ def test_long_position_hits_stop_loss():
 
     candle = make_candle(
         timestamp="2026-01-01 00:15:00",
-        high=100.5,
-        low=97.0,
-        close=97.5,
+        high=81.0,
+        low=79.0,
+        close=79.5,
         atr=1.0,
     )
 
@@ -491,8 +491,8 @@ def test_short_position_hits_take_profit():
 
     signal = make_short_signal(
         entry=100.0,
-        stop_loss=102.0,
-        take_profit=96.0,
+        stop_loss=120.0,
+        take_profit=60.0,
     )
 
     engine.open_position(
@@ -504,9 +504,9 @@ def test_short_position_hits_take_profit():
 
     candle = make_candle(
         timestamp="2026-01-01 00:15:00",
-        high=97.0,
-        low=95.0,
-        close=95.5,
+        high=61.0,
+        low=59.0,
+        close=59.5,
         atr=1.0,
     )
 
@@ -537,8 +537,8 @@ def test_short_position_hits_stop_loss():
 
     signal = make_short_signal(
         entry=100.0,
-        stop_loss=102.0,
-        take_profit=96.0,
+        stop_loss=120.0,
+        take_profit=60.0,
     )
 
     engine.open_position(
@@ -550,9 +550,9 @@ def test_short_position_hits_stop_loss():
 
     candle = make_candle(
         timestamp="2026-01-01 00:15:00",
-        high=103.0,
-        low=99.5,
-        close=102.5,
+        high=121.0,
+        low=118.0,
+        close=120.5,
         atr=1.0,
     )
 

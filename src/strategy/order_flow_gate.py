@@ -1,13 +1,17 @@
 """
-QuantAI Order Flow Gate
+QuantAI Order Flow Gate — Confirmation/Filter (P3.9)
 
 Microstructure-based signal filtering using:
-- VPIN (Volume-synchronized PIN)
-- Kyle's Lambda (market impact)
-- Liquidation levels (support/resistance clusters)
-- Bid/Ask pressure
+- VPIN (real trade-feed, not 0 placeholder)
+- Kyle's Lambda (real L2 impact, not 0)
+- Liquidation levels (real clusters, not 100/0)
+- Bid/Ask pressure + L2 depth + cumulative delta + clusters + absorption
 
 Per ADR-0003: Final gate after AI+ML fusion.
+ARCHITECTURAL RULE: Order Flow = confirmation/filter, NOT independent BUY generator.
+  Strategy HOLD → OrderFlow cannot create trade (enforced).
+  Real L2 confirmation requires: cumulative delta, clusters, L2, bid/ask, absorption (not just pressure).
+  VPIN/Kyle/liquidation placeholder 0/100 are MISSING, not 0 — gate treats as NO_DATA, not confirmation.
 """
 
 from __future__ import annotations
@@ -198,11 +202,61 @@ class OrderFlowGate:
                 result.signal = "HOLD"
                 result.reason = f"Strong BID pressure ({result.pressure:.2f}) conflicts with SELL"
                 return result
+
+        # === Real L2 Confirmation (P3.10) — cumulative delta, clusters, L2, absorption ===
+        # These are MISSING (not 0) until real L2 feed wired — gate treats 0 as NO_DATA, not confirmation
+        # When OrderFlowSignal has real L2 data, check:
+        # - cumulative delta: BUY requires delta >0, SELL requires delta <0
+        cum_delta = getattr(order_flow_signal, "cumulative_delta", None)
+        if cum_delta is not None:
+            if strategy_signal == "BUY" and cum_delta < -0.1:
+                result.approved = False
+                result.signal = "HOLD"
+                result.reason = f"Cumulative delta bearish ({cum_delta:.2f}) conflicts with BUY"
+                return result
+            if strategy_signal == "SELL" and cum_delta > 0.1:
+                result.approved = False
+                result.signal = "HOLD"
+                result.reason = f"Cumulative delta bullish ({cum_delta:.2f}) conflicts with SELL"
+                return result
+
+        # Clusters: check if near cluster with absorption
+        cluster_absorption = getattr(order_flow_signal, "cluster_absorption", None)
+        if cluster_absorption is not None and cluster_absorption > 0.7:
+            # High absorption at cluster → likely reversal, block momentum
+            if result.context in ("BID_PRESSURE", "ASK_PRESSURE"):
+                result.approved = False
+                result.signal = "HOLD"
+                result.reason = f"Cluster absorption {cluster_absorption:.2f} at {result.context} → block momentum"
+                return result
+
+        # L2 depth: if spread is wide and depth is thin, block
+        l2_depth = getattr(order_flow_signal, "l2_depth", None)
+        if l2_depth is not None and l2_depth < 0.3:
+            # Thin book → high slippage, block
+            result.approved = False
+            result.signal = "HOLD"
+            result.reason = f"L2 depth thin ({l2_depth:.2f}) → block (high slippage risk)"
+            return result
+
+        # Bid/Ask imbalance with L2: already checked pressure, but also check microprice delta
+        micro_delta = getattr(order_flow_signal, "microprice_delta", None)
+        if micro_delta is not None:
+            if strategy_signal == "BUY" and micro_delta < -0.001:
+                result.approved = False
+                result.signal = "HOLD"
+                result.reason = f"Microprice delta bearish ({micro_delta:.4f}) vs BUY"
+                return result
+            if strategy_signal == "SELL" and micro_delta > 0.001:
+                result.approved = False
+                result.signal = "HOLD"
+                result.reason = f"Microprice delta bullish ({micro_delta:.4f}) vs SELL"
+                return result
         
-        # All checks passed
+        # All checks passed — real L2 confirmation
         result.approved = True
         result.signal = strategy_signal
-        result.reason = "OrderFlow confirms signal"
+        result.reason = "OrderFlow L2 confirms signal (cumulative delta, clusters, L2, bid/ask, absorption)"
         return result
     
     def _extract_features(

@@ -122,12 +122,24 @@ def evaluate_candidate(
     costs: dict | None = None,
     warmup_bars: int = 0,
     history_window: int = 300,
+    with_is_metrics: bool = True,
 ) -> dict:
     """
     Walk-forward evaluation of one candidate.
 
-    Returns {"metrics": aggregated vector, "windows": [...],
-             "rules": PromotionRules-evaluated later}.
+    Returns {
+        "metrics": OOS aggregated vector,
+        "windows": OOS per-window stats,
+        "is_metrics": IS aggregated (if with_is_metrics),
+        "is_windows": IS per-window,
+        "is_sharpes": list IS Sharpe per window,
+        "oos_sharpes": list OOS Sharpe per window,
+        "is_oos": {is_pf, oos_pf, deterioration, is_sharpe, oos_sharpe, pbo}
+    }
+    IS = in-sample (train) performance per window, OOS = out-of-sample (test).
+    IS vs OOS divergence is the core alpha validation: IS != OOS => no real alpha.
+    Breakout as research hypothesis is expected to show IS good PF but OOS
+    deterioration until proven robust.
     """
     policy = exit_policy or DEFAULT_POLICY
     costs = costs or {"commission": 0.0004, "slippage": 0.0002}
@@ -142,23 +154,42 @@ def evaluate_candidate(
     te_mod.SLIPPAGE = costs["slippage"]
 
     window_stats: list[dict] = []
+    is_window_stats: list[dict] = []
+    is_sharpes: list[float] = []
+    oos_sharpes: list[float] = []
     try:
-        for _wnum, _tr, test_df in eng.generate_windows(df):
+        for _wnum, train_df, test_df in eng.generate_windows(df):
+            # --- OOS (test) — with sufficient history from train tail ---
+            # WalkForward test windows are short (100 bars) but history_window is 300.
+            # Running only on test_df gives artificial 0-trade OOS (IS-OOS artifact).
+            # Provide combined history: train tail + test, warmup on history.
             te = TradeEngine(exit_policy=policy)
             te.initial_balance = te.balance = te.equity = float(initial_balance)
-
-            te.run(
-                test_df,
-                history_window=history_window,
-                warmup_bars=warmup_bars,
-                signal_generator=spec.factory(),
-            )
-
-            m = BacktestEngine._compute_risk_metrics(te, initial_balance)
-            final = te.balance
-            trades_n = len(te.closed_positions)
-            wins_n = sum(1 for p in te.closed_positions if p.net_profit > 0)
-
+            if with_is_metrics and len(train_df) >= min(history_window, 50):
+                tail_len = min(history_window, len(train_df))
+                combined = pd.concat([train_df.tail(tail_len), test_df], ignore_index=True)
+                # Warmup = tail_len so trading starts at test start (no trades in history tail)
+                te.run(
+                    combined,
+                    history_window=history_window,
+                    warmup_bars=tail_len,
+                    signal_generator=spec.factory(),
+                )
+                m = BacktestEngine._compute_risk_metrics(te, initial_balance)
+                final = te.balance
+                trades_n = len(te.closed_positions)
+                wins_n = sum(1 for p in te.closed_positions if p.net_profit > 0)
+            else:
+                te.run(
+                    test_df,
+                    history_window=history_window,
+                    warmup_bars=warmup_bars,
+                    signal_generator=spec.factory(),
+                )
+                m = BacktestEngine._compute_risk_metrics(te, initial_balance)
+                final = te.balance
+                trades_n = len(te.closed_positions)
+                wins_n = sum(1 for p in te.closed_positions if p.net_profit > 0)
             window_stats.append({
                 "net_pct": (final - initial_balance) / initial_balance * 100.0,
                 "pf": _cap_pf(m["profit_factor"]),
@@ -167,13 +198,75 @@ def evaluate_candidate(
                 "trades": trades_n,
                 "wins": wins_n,
             })
+            oos_sharpes.append(float(m["sharpe"]))
+
+            # --- IS (train) — same spec, same costs, for divergence check ---
+            if with_is_metrics:
+                te_is = TradeEngine(exit_policy=policy)
+                te_is.initial_balance = te_is.balance = te_is.equity = float(initial_balance)
+                te_is.run(
+                    train_df,
+                    history_window=history_window,
+                    warmup_bars=warmup_bars,
+                    signal_generator=spec.factory(),
+                )
+                m_is = BacktestEngine._compute_risk_metrics(te_is, initial_balance)
+                final_is = te_is.balance
+                trades_is = len(te_is.closed_positions)
+                wins_is = sum(1 for p in te_is.closed_positions if p.net_profit > 0)
+                is_window_stats.append({
+                    "net_pct": (final_is - initial_balance) / initial_balance * 100.0,
+                    "pf": _cap_pf(m_is["profit_factor"]),
+                    "maxdd_pct": m_is["max_drawdown_pct"],
+                    "sharpe": m_is["sharpe"],
+                    "trades": trades_is,
+                    "wins": wins_is,
+                })
+                is_sharpes.append(float(m_is["sharpe"]))
     finally:
         te_mod.COMMISSION, te_mod.SLIPPAGE = saved_c, saved_s
 
-    return {
-        "metrics": aggregate_windows(window_stats),
+    oos_metrics = aggregate_windows(window_stats)
+    result: dict[str, Any] = {
+        "metrics": oos_metrics,
         "windows": window_stats,
+        "is_metrics": aggregate_windows(is_window_stats) if with_is_metrics else {},
+        "is_windows": is_window_stats,
+        "is_sharpes": is_sharpes,
+        "oos_sharpes": oos_sharpes,
     }
+    # IS-OOS summary for Research Integrity
+    if with_is_metrics and is_window_stats:
+        is_pf = result["is_metrics"].get("pf_median", 0.0)
+        oos_pf = oos_metrics.get("pf_median", 0.0)
+        is_sh = result["is_metrics"].get("sharpe_median", 0.0)
+        oos_sh = oos_metrics.get("sharpe_median", 0.0)
+        # Deterioration ratios
+        pf_deterioration = (is_pf - oos_pf) / max(is_pf, 1e-9) if is_pf > 0 else (0.0 if oos_pf == 0 else 1.0)
+        sharpe_deterioration = (is_sh - oos_sh) / max(abs(is_sh), 1e-9) if is_sh != 0 else 0.0
+        # PBO proxy
+        try:
+            from src.validation.bootstrap import pbo_combinatorial
+            pbo = pbo_combinatorial(is_sharpes, oos_sharpes)
+        except Exception:
+            pbo = 0.5
+        result["is_oos"] = {
+            "is_pf": is_pf,
+            "oos_pf": oos_pf,
+            "pf_ratio": oos_pf / max(is_pf, 1e-9) if is_pf > 0 else 0.0,
+            "pf_deterioration": pf_deterioration,
+            "is_sharpe": is_sh,
+            "oos_sharpe": oos_sh,
+            "sharpe_deterioration": sharpe_deterioration,
+            "pbo": pbo,
+            "is_net": result["is_metrics"].get("net_median_pct", 0.0),
+            "oos_net": oos_metrics.get("net_median_pct", 0.0),
+        }
+        # Surface for integrity gates
+        result["metrics"]["is_pf_median"] = is_pf
+        result["metrics"]["pbo"] = pbo
+        # Keep legacy pbo key for gate
+    return result
 
 
 __all__ = [

@@ -18,10 +18,50 @@ class ExposureResult:
 class ExposureManager:
     def __init__(
         self,
-        max_total_exposure_percent: float = 60.0,
-        max_position_exposure_percent: float = 5.0,
-        max_correlation: float = 0.85,
+        max_total_exposure_percent: float | None = None,
+        max_position_exposure_percent: float | None = None,
+        max_correlation: float | None = None,
+        policy: Any = None,
+        # Separated exposures (point 26): cash/notional/margin/risk/factor — all derived from policy
+        max_cash_exposure_pct: float | None = None,
+        max_notional_exposure_pct: float | None = None,
+        max_margin_exposure_pct: float | None = None,
+        max_risk_exposure_pct: float | None = None,
+        max_factor_exposure_pct: float | None = None,
     ) -> None:
+        import warnings
+        # P0.6 Strict: No Policy -> No Manager — no hidden 60/5 fallback
+        if policy is not None:
+            if max_total_exposure_percent is None:
+                max_total_exposure_percent = float(getattr(policy, "max_total_exposure_pct", 20.0))
+            if max_position_exposure_percent is None:
+                max_position_exposure_percent = float(getattr(policy, "max_position_exposure_pct", 3.0))
+            if max_correlation is None:
+                max_correlation = float(getattr(policy, "max_correlation", 0.70))
+            if max_factor_exposure_pct is None:
+                max_factor_exposure_pct = float(getattr(policy, "max_factor_exposure_pct", 15.0))
+        # Strict: No Policy -> No Manager
+        if max_total_exposure_percent is None:
+            raise ValueError("ExposureManager requires explicit RiskPolicy (Production/Research) or max_total_exposure_percent — No Policy -> No Manager (P0.6)")
+        if max_position_exposure_percent is None:
+            raise ValueError("ExposureManager requires explicit RiskPolicy or max_position_exposure_percent — No Policy -> No Manager (P0.6)")
+        if max_correlation is None:
+            max_correlation = 0.70
+        if max_correlation is None:
+            max_correlation = 0.70
+        # Separated exposures: derive from policy if not given
+        if max_cash_exposure_pct is None:
+            max_cash_exposure_pct = float(max_total_exposure_percent)
+        if max_notional_exposure_pct is None:
+            max_notional_exposure_pct = float(max_total_exposure_percent)
+        if max_margin_exposure_pct is None:
+            # Margin exposure = notional / leverage ; use same cap as total but will be checked via PositionSizer margin
+            max_margin_exposure_pct = float(max_total_exposure_percent)
+        if max_risk_exposure_pct is None:
+            # Risk exposure 1% per trade * max positions
+            max_risk_exposure_pct = 5.0
+        if max_factor_exposure_pct is None:
+            max_factor_exposure_pct = 15.0
         if not 0.0 <= max_total_exposure_percent <= 100.0:
             raise ValueError(
                 "max_total_exposure_percent must be between 0 and 100."
@@ -45,6 +85,12 @@ class ExposureManager:
             max_position_exposure_percent
         )
         self.max_correlation = float(max_correlation)
+        # Separated exposures (persist for RiskOrchestrator diagnostics)
+        self.max_cash_exposure_pct = float(max_cash_exposure_pct)
+        self.max_notional_exposure_pct = float(max_notional_exposure_pct)
+        self.max_margin_exposure_pct = float(max_margin_exposure_pct)
+        self.max_risk_exposure_pct = float(max_risk_exposure_pct)
+        self.max_factor_exposure_pct = float(max_factor_exposure_pct)
 
     def calculate(
         self,

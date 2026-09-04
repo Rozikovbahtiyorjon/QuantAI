@@ -54,6 +54,10 @@ from src.feature_engine import build_features
 class DatasetConfig:
     """
     Configuration for dataset generation.
+
+    Supports two labeling modes:
+      - "simple" (legacy): future close vs current close ± target_profit
+      - "triple_barrier" (Phase 1): path-dependent, cost-aware
     """
 
     # Number of candles into the future
@@ -61,8 +65,19 @@ class DatasetConfig:
     future_bars: int = 5
 
     # Minimum future return required
-    # to classify BUY / SELL.
+    # to classify BUY / SELL (simple mode).
     target_profit: float = 0.002
+
+    # Labeling mode: "simple" | "triple_barrier"
+    label_method: str = "triple_barrier"
+
+    # Triple-barrier params (used when label_method == "triple_barrier")
+    tb_pt: float = 0.012
+    tb_sl: float = 0.008
+    tb_use_atr: bool = True
+    tb_atr_pt_mult: float = 3.0
+    tb_atr_sl_mult: float = 1.5
+    tb_min_net_return: float | None = None  # None → 2*(commission+slippage)
 
     # Minimum history required before
     # Feature Engine starts generating features.
@@ -350,97 +365,58 @@ class DatasetBuilder:
         """
         Generate supervised-learning target.
 
-        Target classes:
-
-            -1 = SELL
-             0 = HOLD
-             1 = BUY
-
-        Logic:
-
-            future return >= target_profit
-                → BUY
-
-            future return <= -target_profit
-                → SELL
-
-            otherwise
-                → HOLD
+        Modes:
+          simple: future return >= target_profit → BUY etc. (legacy)
+          triple_barrier: path-dependent, cost-aware (Phase 1)
+                          upper/lower hit first wins, vertical → HOLD
         """
+        if self.config.label_method == "triple_barrier":
+            self._generate_triple_barrier_targets(df)
+            return
 
-        future = (
-            self.config.future_bars
-        )
-
-        target_profit = (
-            self.config.target_profit
-        )
+        # --- simple legacy ---
+        future = self.config.future_bars
+        target_profit = self.config.target_profit
 
         for row in self.dataset:
-
-            i = int(
-                row["index"]
-            )
-
-            current_close = float(
-                df.iloc[i]["close"]
-            )
-
-            future_close = float(
-                df.iloc[
-                    i + future
-                ]["close"]
-            )
-
+            i = int(row["index"])
+            current_close = float(df.iloc[i]["close"])
+            future_close = float(df.iloc[i + future]["close"])
             if current_close <= 0:
-
                 row["target"] = 0
                 row["future_return"] = 0.0
-
                 continue
-
-            change = (
-                future_close
-                - current_close
-            ) / current_close
-
-            # ------------------------------------------------
-            # BUY
-            # ------------------------------------------------
-
-            if (
-                change
-                >= target_profit
-            ):
-
+            change = (future_close - current_close) / current_close
+            if change >= target_profit:
                 target = 1
-
-            # ------------------------------------------------
-            # SELL
-            # ------------------------------------------------
-
-            elif (
-                change
-                <= -target_profit
-            ):
-
+            elif change <= -target_profit:
                 target = -1
-
-            # ------------------------------------------------
-            # HOLD
-            # ------------------------------------------------
-
             else:
-
                 target = 0
+            row["target"] = target
+            row["future_return"] = float(change)
 
-            row["target"] = (
-                target
-            )
+    def _generate_triple_barrier_targets(self, df: pd.DataFrame) -> None:
+        """Triple-barrier: first of upper/lower/vertical wins, net-of-cost filtered."""
+        from src.labeling import TripleBarrierConfig, triple_barrier_label
 
-            row["future_return"] = (
-                float(change)
-            )
+        cfg = TripleBarrierConfig(
+            pt=float(self.config.tb_pt),
+            sl=float(self.config.tb_sl),
+            max_holding_bars=int(self.config.future_bars),
+            use_atr=bool(self.config.tb_use_atr),
+            atr_pt_mult=float(self.config.tb_atr_pt_mult),
+            atr_sl_mult=float(self.config.tb_atr_sl_mult),
+            min_net_return=self.config.tb_min_net_return,
+        )
+        for row in self.dataset:
+            i = int(row["index"])
+            r = triple_barrier_label(df, i, cfg)
+            row["target"] = int(r["target"])
+            row["future_return"] = float(r["ret"])
+            # diagnostics for analysis (kept, not used as feature)
+            row["tb_barrier"] = r["barrier"]
+            row["tb_t1"] = int(r["t1"])
 
     # ====================================================
     # CLEAN DATASET
@@ -538,7 +514,15 @@ class DatasetBuilder:
         )
 
         # ------------------------------------------------
-        # 6. Feature Store auto-materialization
+        # 6. Train-tail drop (prevent look-ahead bias)
+        # ------------------------------------------------
+        # Drop the last `future_bars` rows since their labels
+        # depend on future data that would not be available at prediction time
+        if len(dataset) > self.config.future_bars:
+            dataset = dataset.iloc[:-self.config.future_bars].copy()
+
+        # ------------------------------------------------
+        # 7. Feature Store auto-materialization
         # ------------------------------------------------
         if self.config.feature_store_enabled:
             self._materialize_to_store(dataset, df)

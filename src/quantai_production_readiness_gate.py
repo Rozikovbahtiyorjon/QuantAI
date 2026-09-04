@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Dict
 
 
 @dataclass(frozen=True)
@@ -9,6 +9,34 @@ class ProductionReadinessCheck:
     name: str
     passed: bool
     message: str
+
+
+@dataclass(frozen=True)
+class ProductionEvidenceContract:
+    """Strict typed contract — no generic _extract_boolean (point 13)."""
+    oos_pass: bool
+    paper_pass: bool
+    risk_pass: bool
+    execution_pass: bool
+    monitoring_pass: bool
+    statistical_pass: bool
+    metadata: Dict[str, Any] = field(default_factory=dict, compare=False, hash=False)
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "ProductionEvidenceContract":
+        required = ["oos_pass","paper_pass","risk_pass","execution_pass","monitoring_pass","statistical_pass"]
+        missing = [k for k in required if k not in d]
+        if missing:
+            raise ValueError(f"ProductionEvidenceContract missing keys: {missing}")
+        return cls(
+            oos_pass=bool(d["oos_pass"]),
+            paper_pass=bool(d["paper_pass"]),
+            risk_pass=bool(d["risk_pass"]),
+            execution_pass=bool(d["execution_pass"]),
+            monitoring_pass=bool(d["monitoring_pass"]),
+            statistical_pass=bool(d["statistical_pass"]),
+            metadata={k:v for k,v in d.items() if k not in required},
+        )
 
 
 @dataclass
@@ -95,11 +123,25 @@ class QuantAIProductionReadinessGate:
     # =====================================================
 
     @staticmethod
+    def _has_typed_failure(result: Any) -> Optional[str]:
+        """If result carries typed contract fields, any False must fail — prevents success=True bypass (point 13)."""
+        if isinstance(result, dict):
+            for k in ["oos_pass","paper_pass","risk_pass","execution_pass","monitoring_pass","statistical_pass"]:
+                if k in result and not bool(result[k]):
+                    return k
+        # also check ProductionEvidenceContract instance
+        if isinstance(result, ProductionEvidenceContract):
+            for k in ["oos_pass","paper_pass","risk_pass","execution_pass","monitoring_pass","statistical_pass"]:
+                if not bool(getattr(result, k)):
+                    return k
+        return None
+
+    @staticmethod
     def _extract_boolean(
         result: Any,
         attributes: tuple[str, ...],
     ) -> Optional[bool]:
-
+        """Deprecated generic extractor — kept for legacy 5-arg path but guarded by _has_typed_failure."""
         if result is None:
             return None
 
@@ -121,6 +163,12 @@ class QuantAIProductionReadinessGate:
                 ):
 
                     return value
+
+        # Also support dict access
+        if isinstance(result, dict):
+            for attr in attributes:
+                if attr in result and isinstance(result[attr], bool):
+                    return bool(result[attr])
 
         return None
 
@@ -180,6 +228,11 @@ class QuantAIProductionReadinessGate:
                 ),
             )
 
+        # Typed contract guard — success=True cannot hide oos_pass=False
+        tf = self._has_typed_failure(result)
+        if tf:
+            return ProductionReadinessCheck(name="end_to_end_validation", passed=False, message=f"Typed contract {tf}=False blocks bypass (success=True ignored)")
+
         passed = self._extract_boolean(
             result,
             (
@@ -236,6 +289,10 @@ class QuantAIProductionReadinessGate:
                 ),
             )
 
+        tf = self._has_typed_failure(result)
+        if tf:
+            return ProductionReadinessCheck(name="paper_trading_validation", passed=False, message=f"Typed contract {tf}=False blocks bypass")
+
         passed = self._extract_boolean(
             result,
             (
@@ -290,6 +347,10 @@ class QuantAIProductionReadinessGate:
                     "was not provided."
                 ),
             )
+
+        tf = self._has_typed_failure(result)
+        if tf:
+            return ProductionReadinessCheck(name="paper_trading_quality_gate", passed=False, message=f"Typed contract {tf}=False blocks bypass")
 
         passed = self._extract_boolean(
             result,
@@ -346,6 +407,10 @@ class QuantAIProductionReadinessGate:
                 ),
             )
 
+        tf = self._has_typed_failure(result)
+        if tf:
+            return ProductionReadinessCheck(name="unified_system_integration", passed=False, message=f"Typed contract {tf}=False blocks bypass")
+
         passed = self._extract_boolean(
             result,
             (
@@ -401,6 +466,10 @@ class QuantAIProductionReadinessGate:
                 ),
             )
 
+        tf = self._has_typed_failure(result)
+        if tf:
+            return ProductionReadinessCheck(name="system_health", passed=False, message=f"Typed contract {tf}=False blocks bypass")
+
         passed = self._extract_boolean(
             result,
             (
@@ -442,6 +511,36 @@ class QuantAIProductionReadinessGate:
         )
 
     # =====================================================
+    # TYPED CONTRACT — strict (point 13)
+    # =====================================================
+
+    def _check_typed_contract(self, contract: Any) -> List[ProductionReadinessCheck]:
+        """Strict: requires ProductionEvidenceContract with 6 explicit bools — no _extract_boolean fallback."""
+        checks: List[ProductionReadinessCheck] = []
+        # Accept dataclass or dict
+        if isinstance(contract, ProductionEvidenceContract):
+            d = {
+                "oos_pass": contract.oos_pass,
+                "paper_pass": contract.paper_pass,
+                "risk_pass": contract.risk_pass,
+                "execution_pass": contract.execution_pass,
+                "monitoring_pass": contract.monitoring_pass,
+                "statistical_pass": contract.statistical_pass,
+            }
+        elif isinstance(contract, dict) and all(k in contract for k in ["oos_pass","paper_pass","risk_pass","execution_pass","monitoring_pass","statistical_pass"]):
+            d = contract
+        else:
+            raise TypeError("Typed contract requires ProductionEvidenceContract or dict with oos_pass/paper_pass/risk_pass/execution_pass/monitoring_pass/statistical_pass")
+        for name in ["oos_pass","paper_pass","risk_pass","execution_pass","monitoring_pass","statistical_pass"]:
+            passed = bool(d[name])
+            checks.append(ProductionReadinessCheck(
+                name=name,
+                passed=passed,
+                message=f"{name}: {'PASS' if passed else 'FAIL'} (typed contract)",
+            ))
+        return checks
+
+    # =====================================================
     # EVALUATION
     # =====================================================
 
@@ -452,12 +551,15 @@ class QuantAIProductionReadinessGate:
         quality_gate_result: Any = None,
         integration_result: Any = None,
         system_health_result: Any = None,
+        contract: Any = None,
     ) -> QuantAIProductionReadinessResult:
         """
-        Aggregate all production-readiness results.
+        Aggregate all production-readiness results — TYPED ONLY (P0.6).
 
-        A required check that is missing or failed makes
-        the final readiness result False.
+        Production readiness REQUIRES ProductionEvidenceContract with 6 explicit bools:
+        oos_pass, paper_pass, risk_pass, execution_pass, monitoring_pass, statistical_pass.
+        Generic result["success"]/valid/passed/healthy/ready is FORBIDDEN — not trusted.
+        Missing typed contract → FAIL (no fallback to generic _extract_boolean for production).
         """
 
         checks: List[
@@ -467,6 +569,38 @@ class QuantAIProductionReadinessGate:
         errors: List[str] = []
 
         warnings: List[str] = []
+
+        # ---- Strict typed contract REQUIRED (P0.6) — no generic fallback for production ----
+        typed_src = contract
+        # Also detect contract smuggled as first arg dict with 6 keys
+        if typed_src is None:
+            for cand in [end_to_end_result, paper_validation_result, quality_gate_result, integration_result, system_health_result]:
+                if isinstance(cand, ProductionEvidenceContract) or (isinstance(cand, dict) and all(k in cand for k in ["oos_pass","paper_pass","risk_pass","execution_pass","monitoring_pass","statistical_pass"])):
+                    typed_src = cand
+                    break
+        if typed_src is not None:
+            try:
+                checks = self._check_typed_contract(typed_src)
+                # Collect typed contract errors
+                for c in checks:
+                    if not c.passed:
+                        errors.append(f"{c.name}: {c.message}")
+                ready = len(checks) == 6 and all(c.passed for c in checks)
+                return QuantAIProductionReadinessResult(ready=ready, checks=checks, errors=errors, warnings=warnings)
+            except Exception as e:
+                return QuantAIProductionReadinessResult(
+                    ready=False,
+                    checks=[],
+                    errors=[f"Typed contract error: {e}"],
+                    warnings=[],
+                )
+        # NO typed contract → FAIL (generic success/valid/passed is FORBIDDEN for production)
+        return QuantAIProductionReadinessResult(
+            ready=False,
+            checks=[],
+            errors=["ProductionEvidenceContract required: 6 explicit bools (oos_pass, paper_pass, risk_pass, execution_pass, monitoring_pass, statistical_pass) — generic result[\"success\"]/valid/passed not trusted (P0.6)"],
+            warnings=[],
+        )
 
         # -------------------------------------------------
         # END-TO-END
@@ -634,6 +768,7 @@ def evaluate_production_readiness(
 
 __all__ = [
     "ProductionReadinessCheck",
+    "ProductionEvidenceContract",
     "QuantAIProductionReadinessResult",
     "QuantAIProductionReadinessGate",
     "evaluate_production_readiness",

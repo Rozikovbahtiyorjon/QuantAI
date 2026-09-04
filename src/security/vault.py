@@ -55,14 +55,14 @@ class KeyStatus(Enum):
 
 @dataclass
 class VaultConfig:
-    """Vault configuration."""
-    
+    """Vault configuration — SECURITY: no default credentials in production (Task 11)."""
+
     # PostgreSQL connection
     db_host: str = "localhost"
     db_port: int = 5432
     db_name: str = "quantai_vault"
     db_user: str = "quantai"
-    db_password: str = "changeme"
+    db_password: str = ""  # MUST be set via VAULT_DB_PASSWORD / POSTGRES_PASSWORD env — no default fallback
     db_pool_size: int = 10
     
     # Encryption
@@ -80,19 +80,52 @@ class VaultConfig:
     
     @classmethod
     def from_env(cls) -> "VaultConfig":
-        """Create config from environment variables."""
+        """Create config from environment variables — fail-closed if secrets missing in production."""
+        # SECURITY (Task 11): No default password fallback. Require env var, fail if missing in production.
+        # For backwards compat, also accept POSTGRES_PASSWORD (docker-compose canonical)
+        pwd = os.getenv("VAULT_DB_PASSWORD") or os.getenv("POSTGRES_PASSWORD") or ""
+        if not pwd:
+            is_prod = os.getenv("ENV", "").lower() in ("production", "prod", "live") or os.getenv(
+                "BINANCE_TESTNET", "true"
+            ).lower() in ("false", "0", "no")
+            if is_prod:
+                raise ValueError(
+                    "VAULT_DB_PASSWORD (or POSTGRES_PASSWORD) must be set in production — "
+                    "default credential 'changeme' is forbidden (Task 11). "
+                    "Set VAULT_DB_PASSWORD to a strong random password."
+                )
+            logger.warning(
+                "VAULT_DB_PASSWORD not set — using empty password (dev/testnet only). "
+                "Set VAULT_DB_PASSWORD for production."
+            )
+        elif pwd == "changeme":
+            raise ValueError(
+                "VAULT_DB_PASSWORD='changeme' is a default credential and is forbidden. "
+                "Generate a strong password (e.g. openssl rand -base64 24) and set VAULT_DB_PASSWORD."
+            )
         return cls(
             db_host=os.getenv("VAULT_DB_HOST", "localhost"),
             db_port=int(os.getenv("VAULT_DB_PORT", "5432")),
             db_name=os.getenv("VAULT_DB_NAME", "quantai_vault"),
             db_user=os.getenv("VAULT_DB_USER", "quantai"),
-            db_password=os.getenv("VAULT_DB_PASSWORD", "changeme"),
+            db_password=pwd,
             db_pool_size=int(os.getenv("VAULT_DB_POOL_SIZE", "10")),
             master_key=os.getenv("VAULT_MASTER_KEY"),
             default_ttl_days=int(os.getenv("VAULT_DEFAULT_TTL_DAYS", "90")),
             max_key_age_days=int(os.getenv("VAULT_MAX_KEY_AGE_DAYS", "365")),
             rotation_warning_days=int(os.getenv("VAULT_ROTATION_WARNING_DAYS", "7")),
         )
+
+    def validate_production(self) -> None:
+        """Explicit validation — call before starting vault in production."""
+        if not self.db_password or self.db_password == "changeme":
+            raise ValueError("VaultConfig: db_password must be set to a strong value in production (no default fallback).")
+        if not self.master_key:
+            is_prod = os.getenv("ENV", "").lower() in ("production", "prod", "live") or os.getenv(
+                "BINANCE_TESTNET", "true"
+            ).lower() in ("false", "0", "no")
+            if is_prod:
+                raise ValueError("VaultConfig: VAULT_MASTER_KEY must be set in production — ephemeral keys are forbidden.")
 
 
 class KeyRoleDB(str, Enum):
@@ -266,13 +299,29 @@ class VaultService:
         self._running = False
         self._cleanup_task: Optional[asyncio.Task] = None
         
-        # Initialize encryption
+        # Initialize encryption — fail-closed in production if master key missing
         if config.master_key:
-            master_key = base64.urlsafe_b64decode(config.master_key)
+            try:
+                master_key = base64.urlsafe_b64decode(config.master_key.encode())
+                # validate key length by attempting Fernet
+                Fernet(master_key)
+            except Exception as e:
+                raise ValueError(f"Invalid VAULT_MASTER_KEY (must be valid Fernet base64 key): {e}")
         else:
-            # Generate from environment or create new
+            is_prod = os.getenv("ENV", "").lower() in ("production", "prod", "live") or os.getenv(
+                "BINANCE_TESTNET", "true"
+            ).lower() in ("false", "0", "no")
+            if is_prod:
+                raise ValueError(
+                    "VAULT_MASTER_KEY must be set in production — ephemeral Fernet key is forbidden (Task 11). "
+                    "Generate with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+                )
+            # Dev/testnet: ephemeral key allowed but warn and mark as non-persistent
             master_key = Fernet.generate_key()
-            logger.warning("No master key provided, generated ephemeral key")
+            logger.warning(
+                "VAULT_MASTER_KEY not set — generated ephemeral Fernet key (dev/testnet only). "
+                "Keys encrypted with this will be unrecoverable after restart. Set VAULT_MASTER_KEY for persistence."
+            )
         self._encryption = EncryptionService(master_key)
     
     async def initialize(self) -> None:

@@ -29,7 +29,7 @@ from sklearn.ensemble import RandomForestClassifier, HistGradientBoostingClassif
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import balanced_accuracy_score
 
-from src.ml_engine import MLConfig
+from src.ml_config import MLConfig
 from src.regime_filter import RANGE
 from src.validation.purged_kfold import get_purged_cv
 from xgboost import XGBClassifier

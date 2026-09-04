@@ -470,6 +470,13 @@ class BinanceRestAdapter:
         
         return await self._post("/fapi/v1/order", params, signed=True, weight=1)
     
+    async def place_order_with_client_id(self, intent, client_order_id: str) -> dict:
+        """Place order with explicit clientOrderId for idempotency."""
+        params = self._build_order_params(intent)
+        params["newClientOrderId"] = client_order_id
+        
+        return await self._post("/fapi/v1/order", params, signed=True, weight=1)
+    
     async def cancel_order(self, symbol: str, order_id: Optional[str] = None, client_order_id: Optional[str] = None) -> dict:
         params = {"symbol": symbol}
         if order_id:

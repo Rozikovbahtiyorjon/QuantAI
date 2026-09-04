@@ -248,6 +248,52 @@ class FeatureEngine:
         )
 
     # ====================================================
+    # TREND / ADX / MACD / BB / SUPERTREND (FeatureGate v2)
+    # ====================================================
+
+    def calculate_trend_features(self, row: pd.Series) -> None:
+        # trend_score already computed in indicators.add_indicators
+        if "trend_score" in row and pd.notna(row["trend_score"]):
+            self.features.add("trend_score", float(row["trend_score"]) / 6.0)  # normalize -6..6 -> -1..1
+        if "adx" in row and pd.notna(row["adx"]):
+            self.features.add("adx_norm", float(row["adx"]) / 100.0)
+            self.features.add("adx_strong", 1.0 if float(row["adx"]) > 25 else 0.0)
+        if "plus_di" in row and "minus_di" in row and pd.notna(row["plus_di"]):
+            self.features.add("di_diff", (float(row["plus_di"]) - float(row["minus_di"])) / 100.0)
+
+    def calculate_macd_features(self, row: pd.Series) -> None:
+        if "macd" in row and "macd_signal" in row and pd.notna(row["macd"]):
+            self.features.add("macd_norm", float(row["macd"]) / (float(row["close"]) * 0.01 + 1e-9))
+            self.features.add("macd_hist_norm", float(row["macd_hist"]) / (float(row["close"]) * 0.01 + 1e-9))
+            # macd above signal?
+            self.features.add("macd_above_signal", 1.0 if float(row["macd"]) > float(row["macd_signal"]) else 0.0)
+
+    def calculate_bollinger_features(self, row: pd.Series) -> None:
+        if "bb_upper" in row and pd.notna(row["bb_upper"]):
+            close = float(row["close"])
+            upper = float(row["bb_upper"])
+            lower = float(row["bb_lower"])
+            middle = float(row["bb_middle"])
+            width = (upper - lower) / (middle + 1e-9)
+            pos = (close - lower) / (upper - lower + 1e-9)  # 0=lower, 1=upper
+            self.features.add("bb_width", width)
+            self.features.add("bb_position", pos - 0.5)  # -0.5..0.5
+            # squeeze?
+            self.features.add("bb_squeeze", 1.0 if width < 0.02 else 0.0)
+
+    def calculate_supertrend_features(self, row: pd.Series) -> None:
+        if "trend" in row and pd.notna(row["trend"]):
+            self.features.add("supertrend_dir", float(row["trend"]))  # -1 / 1
+        if "supertrend" in row and pd.notna(row["supertrend"]):
+            self.features.add("supertrend_dist", (float(row["close"]) - float(row["supertrend"])) / float(row["close"]))
+
+    def calculate_volume_extra(self, row: pd.Series) -> None:
+        if "volume_filter" in row:
+            self.features.add("volume_anomaly", 1.0 if bool(row["volume_filter"]) else 0.0)
+        if "volatility_filter" in row:
+            self.features.add("volatility_high", 1.0 if bool(row["volatility_filter"]) else 0.0)
+
+    # ====================================================
     # MICROSTRUCTURE FEATURES
     # ====================================================
 
@@ -255,35 +301,61 @@ class FeatureEngine:
         self,
         row: pd.Series,
     ) -> None:
-        """Calculate VPIN features from current row."""
-        # VPIN requires trade data, not just OHLCV
-        # For now, we'll add placeholder features
-        # In production, VPINCalculator.update() would be called with trade data
-        self.features.add("vpin", 0.0)
-        self.features.add("vpin_toxicity", 0.0)
+        """VPIN — MISSING: skip feature entirely until trade-feed wired, do NOT emit 0.
+
+        Previously emitted 0.0 (fake signal) or NaN (dropped all rows).
+        Correct: do not add to FeatureVector — ML trains on core 11 features only.
+        When live trade feed is wired, this will compute VPIN from real bucketed volume
+        via VPINCalculator, not 0 placeholder. Until then, feature is MISSING.
+        Live-derived: bucket_volume from real trades, not OHLC volume.
+        """
+        # Check if real VPIN data is available (requires trade-by-trade feed)
+        # Until then, do not add fake 0 — mark as MISSING for diagnostics
+        if hasattr(self._vpin_calculator, 'is_ready') and not self._vpin_calculator.is_ready():
+            return
+        # If calculator has real data, compute
+        try:
+            vpin = self._vpin_calculator.get_vpin()
+            if vpin is not None and 0 < vpin < 1:
+                self.features.add("vpin", float(vpin))
+        except Exception:
+            pass
+        return
 
     def calculate_kyle_lambda_features(
         self,
         row: pd.Series,
     ) -> None:
-        """Calculate Kyle's Lambda features from current row."""
-        # Kyle's Lambda requires order flow data
-        # Placeholder for now
-        self.features.add("kyle_lambda", 0.0)
-        self.features.add("kyle_lambda_rsq", 0.0)
-        self.features.add("kyle_lambda_confidence", 0.0)
+        """Kyle Lambda — MISSING until L2 order book wired, do NOT emit 0."""
+        if hasattr(self._kyle_lambda_estimator, 'is_ready') and not self._kyle_lambda_estimator.is_ready():
+            return
+        try:
+            kyle = self._kyle_lambda_estimator.get_lambda()
+            if kyle is not None and kyle != 0:
+                self.features.add("kyle_lambda", float(kyle))
+        except Exception:
+            pass
+        return
 
     def calculate_liquidation_features(
         self,
         row: pd.Series,
     ) -> None:
-        """Calculate liquidation level features from current row."""
-        # Liquidation features require liquidation data
-        # Placeholder for now
-        self.features.add("nearest_support_dist", 100.0)
-        self.features.add("nearest_resistance_dist", 100.0)
-        self.features.add("support_strength", 0.0)
-        self.features.add("resistance_strength", 0.0)
+        """Liquidation — MISSING until real liquidation feed wired, do NOT emit 100/0 placeholder."""
+        # Previously: distances = 100, strengths = 0 (fake)
+        # Correct: compute from real LiquidationLevelAnalyzer only if has clusters
+        try:
+            levels = self._liquidation_analyzer.get_levels()
+            if not levels:
+                return  # MISSING — do not emit 100
+            # If has real levels, compute distances
+            close = float(row.get("close", 0))
+            # Find nearest support/resistance from real clusters
+            # (simplified: would need actual cluster logic)
+            pass
+        except Exception:
+            pass
+        return
 
     # ====================================================
     # BUILD FEATURE VECTOR
@@ -317,12 +389,19 @@ class FeatureEngine:
         # RSI
         self.calculate_rsi_features(row)
 
-        # Microstructure
+        # FeatureGate v2: trend / momentum / volatility
+        self.calculate_trend_features(row)
+        self.calculate_macd_features(row)
+        self.calculate_bollinger_features(row)
+        self.calculate_supertrend_features(row)
+        self.calculate_volume_extra(row)
+
+        # Microstructure (skipped — MISSING)
         self.calculate_vpin_features(row)
         self.calculate_kyle_lambda_features(row)
         self.calculate_liquidation_features(row)
 
-        # Alternative Data
+        # Alternative Data (skipped — MISSING)
         self.calculate_alternative_data_features(row)
 
         # Auto-log to Feature Store if live logger is attached (non-blocking)
@@ -338,21 +417,8 @@ class FeatureEngine:
         self,
         row: pd.Series,
     ) -> None:
-        """Calculate alternative data features (LunarCrush, Funding Rate, OI Delta)."""
-        # Placeholder for alternative data features
-        # In production, these would be populated from AlternativeDataManager
-        self.features.add("lunar_galaxy_score", 50.0)
-        self.features.add("lunar_alt_rank", 500)
-        self.features.add("lunar_social_volume", 0.0)
-        self.features.add("lunar_social_engagement", 0.0)
-        self.features.add("lunar_social_dominance", 0.0)
-        self.features.add("lunar_sentiment", 0.5)
-        self.features.add("lunar_price_score", 0.5)
-        self.features.add("funding_rate", 0.0)
-        self.features.add("funding_rate_8h", 0.0)
-        self.features.add("funding_rate_24h", 0.0)
-        self.features.add("oi_delta", 0.0)
-        self.features.add("oi_delta_pct", 0.0)
+        """Alternative data — MISSING: skip entirely until live feed."""
+        return
 
 
 # ====================================================

@@ -329,8 +329,13 @@ class TestGovernanceR4A:
         res = pipe.review_champion(evals)
 
         assert res["flagged"] is True
-        # status unchanged - system stays deployable
-        assert pipe.registry.get("a").status == "champion"
+        # Production invariant: known failing MUST NOT be exposed as CHAMPION
+        # Research keeps it as under_review, production sees NO_CHAMPION
+        assert pipe.registry.get("a").status == "under_review"
+        assert pipe.production_champion_id() is None
+        assert pipe.research_champion_id() == "a"
+        assert pipe.current_champion_id() is None  # production view
+        assert res.get("production_champion") is None
         assert any(h.event == "champion_under_review" for h in pipe.history)
 
     def test_review_recovers_on_pass(self, tmp_path) -> None:
@@ -341,11 +346,15 @@ class TestGovernanceR4A:
 
         fail = {"a": {"rules_passed": False, "rules_flags": {"pf_ok": False}}}
         pipe.review_champion(fail)
+        assert pipe.registry.get("a").status == "under_review"
+        assert pipe.production_champion_id() is None
 
         ok = {"a": {"rules_passed": True, "rules_flags": {}}}
         res = pipe.review_champion(ok)
 
         assert res.get("recovered") is True
+        assert pipe.registry.get("a").status == "champion"
+        assert pipe.production_champion_id() == "a"
         assert any(h.event == "champion_recovered" for h in pipe.history)
 
     def test_flag_survives_persistence(self, tmp_path) -> None:
@@ -364,3 +373,7 @@ class TestGovernanceR4A:
         pipe2._load()
 
         assert getattr(pipe2, "flag:a", False) is True
+        # Persisted status must remain under_review so production stays NO_CHAMPION
+        assert pipe2.registry.get("a").status == "under_review"
+        assert pipe2.production_champion_id() is None
+        assert pipe2.research_champion_id() == "a"

@@ -13,7 +13,10 @@ if the trade is committed.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
+import pandas as pd
 
 
 @dataclass(frozen=True)
@@ -43,6 +46,22 @@ class RiskContext:
 
     risk_percent: float = 1.0
     leverage: float = 1.0
+
+    # Task 7: factor risk context (optional, for correlation-adjusted gate)
+    open_positions: Dict[str, Any] = field(default_factory=dict, compare=False, hash=False)  # symbol -> {notional} or Position
+    correlation_matrix: Optional[pd.DataFrame] = field(default=None, compare=False, hash=False)
+    factor_map: Optional[Dict[str, str]] = field(default=None, compare=False, hash=False)
+    betas: Optional[Dict[str, float]] = field(default=None, compare=False, hash=False)
+    max_factor_concentration: float = 0.70
+    correlation_adjusted_limit: float = 0.15
+    max_herfindahl: float = 0.60
+    # P0.3: staleness / missing data — UNKNOWN → REJECT
+    balance_timestamp: Optional[datetime] = field(default=None, compare=False, hash=False)
+    market_data_timestamp: Optional[datetime] = field(default=None, compare=False, hash=False)
+    position_state_version: Optional[int] = field(default=None, compare=False, hash=False)
+    # Max age for balances/market data (seconds)
+    max_balance_age_sec: float = 5.0
+    max_market_data_age_sec: float = 5.0
 
     def __post_init__(self) -> None:
         numeric = (

@@ -1,0 +1,311 @@
+# QuantAI Regime-Aware Strategy Skill
+# Generates regime-adaptive trading strategies that adapt behavior based on detected market regimes
+
+metadata:
+  name: "QuantAI Regime-Aware Strategy"
+  category: "quantai"
+  phase: "strategy"
+  required: true
+  version: "1.0.0"
+  author: "QuantAI Team"
+  description: |
+    Generates regime-adaptive trading strategies that dynamically adapt behavior
+    based on detected market regimes (trend, mean-reversion, high-vol, low-vol).
+    Each regime has its own specialized sub-strategy with regime-specific parameters.
+
+inputs:
+  - name: "regime_labels"
+    type: "Series"
+    description: "Regime labels per timestamp (from regime detection skill)"
+    required: true
+  - name: "regime_probabilities"
+    type: "DataFrame"
+    description: "Regime probabilities per timestamp"
+    required: false
+  - name: "market_data"
+    type: "DataFrame"
+    description: "Prepared market data with indicators"
+    required: true
+  - name: "symbol"
+    type: "string"
+    description: "Trading symbol"
+    required: true
+  - name: "base_config"
+    type: "dict"
+    description: "Base strategy configuration"
+    required: false
+
+regime_strategies:
+  trend_bull:
+    name: "Trend Following Long"
+    description: "Trend-following long positions in bullish regime"
+    enabled: true
+    logic: "ema_fast > ema_slow > ema_trend AND adx > 25 AND close > ema_trend"
+    entry:
+      - "ema_cross_up: ema_fast crosses above ema_slow"
+      - "breakout: close > donchian_upper"
+    exit:
+      - "ema_cross_down: ema_fast crosses below ema_slow"
+      - "trailing_stop: atr * 2.0"
+      - "trend_break: close < ema_trend"
+    risk:
+      position_size: "risk_parity"
+      max_leverage: 3.0
+      stop_loss: "atr * 1.5"
+      take_profit: "atr * 3.0"
+      trailing: true
+    filters:
+      - "adx > 25"
+      - "volume > volume_sma * 1.2"
+      - "close > ema_200"
+    regime_confidence_boost: 1.2
+
+  trend_bear:
+    name: "Trend Following Short"
+    description: "Trend-following short positions in bearish regime"
+    enabled: true
+    logic: "ema_fast < ema_slow < ema_trend AND adx > 25 AND close < ema_trend"
+    entry:
+      - "ema_cross_down: ema_fast crosses below ema_slow"
+      - "breakdown: close < donchian_lower"
+    exit:
+      - "ema_cross_up: ema_fast crosses above ema_slow"
+      - "trailing_stop: atr * 2.0"
+      - "trend_break: close > ema_trend"
+    risk:
+      position_size: "risk_parity"
+      max_leverage: 3.0
+      stop_loss: "atr * 1.5"
+      take_profit: "atr * 3.0"
+      trailing: true
+    filters:
+      - "adx > 25"
+      - "volume > volume_sma * 1.2"
+      - "close < ema_200"
+    regime_confidence_boost: 1.2
+
+  mean_reversion:
+    name: "Mean Reversion"
+    description: "Mean reversion in ranging markets"
+    enabled: true
+    logic: "adx < 25 AND bb_width < 20th percentile"
+    entry:
+      - long: "bb_position <= 0.1 AND rsi <= 30"
+      - short: "bb_position >= 0.9 AND rsi >= 70"
+    exit:
+      - long: "bb_position >= 0.5 OR rsi >= 55"
+      - short: "bb_position <= 0.5 OR rsi <= 45"
+      - stop: "atr * 1.5"
+      - target: "atr * 2.0"
+    risk:
+      position_size: "mean_reversion_sizing"
+      max_leverage: 2.0
+      stop_loss: "atr * 1.5"
+      take_profit: "atr * 2.0"
+      max_hold_bars: 20
+    filters:
+      - "adx < 25"
+      - "bb_width < 20th percentile"
+      - "volume > volume_sma * 0.8"
+    bb_squeeze_filter: true
+    bb_squeeze_width: 0.02
+
+  high_volatility:
+    name: "Volatility Breakout"
+    description: "Volatility expansion breakout strategy"
+    enabled: false
+    logic: "atr_percentile > 80 AND bb_width > 80th percentile"
+    entry:
+      - long: "close > donchian_upper AND volume > volume_sma * 2.0"
+      - short: "close < donchian_lower AND volume > volume_sma * 2.0"
+    exit:
+      - stop: "atr * 2.0"
+      - target: "atr * 4.0"
+      - time_exit: 10 bars
+    risk:
+      position_size: "vol_adjusted"
+      max_leverage: 1.5
+      stop_loss: "atr * 2.0"
+      take_profit: "atr * 4.0"
+
+  low_volatility:
+    name: "Volatility Harvesting"
+    description: "Sell premium in low volatility"
+    enabled: false
+    logic: "atr_percentile < 20 AND bb_width < 20th percentile"
+    entry:
+      - "sell_premium: delta_neutral_straddles"
+    exit:
+      - "buy_back: premium < 0.5 * entry_premium"
+      - "time_exit: 5 bars"
+    risk:
+      position_size: "premium_based"
+      max_leverage: 1.0
+
+regime_transition_rules:
+  hysteresis:
+    description: "Prevent regime flickering"
+    adx_enter: 25
+    adx_exit: 18
+    trend_confirmation_bars: 3
+  
+  transition_matrix:
+    allowed:
+      - from: "trend_bull", to: ["mean_reversion", "high_volatility"]
+      - from: "trend_bear", to: ["mean_reversion", "high_volatility"]
+      - from: "mean_reversion", to: ["trend_bull", "trend_bear", "high_volatility"]
+      - from: "high_volatility", to: ["trend_bull", "trend_bear", "mean_reversion", "low_volatility"]
+      - from: "low_volatility", to: ["mean_reversion", "high_volatility"]
+    blocked:
+      - from: "trend_bull", to: "trend_bear"
+      - from: "trend_bear", to: "trend_bull"
+
+regime_specific_parameters:
+  trend_bull:
+    adx_min: 25
+    ema_alignment: "fast > slow > trend"
+    confidence_boost: 1.2
+    sl_atr_mult: 1.5
+    tp_atr_mult: 3.0
+    trail_atr_mult: 2.0
+    max_leverage: 3.0
+  
+  trend_bear:
+    adx_min: 25
+    ema_alignment: "fast < slow < trend"
+    confidence_boost: 1.2
+    sl_atr_mult: 1.5
+    tp_atr_mult: 3.0
+    trail_atr_mult: 2.0
+    max_leverage: 3.0
+  
+  mean_reversion:
+    adx_max: 25
+    bb_squeeze_width: 0.02
+    rsi_oversold: 30
+    rsi_overbought: 70
+    bb_position_buy: 0.1
+    bb_position_sell: 0.9
+    sl_atr_mult: 1.5
+    tp_atr_mult: 2.0
+    max_hold_bars: 20
+    max_leverage: 2.0
+  
+  high_volatility:
+    atr_percentile_min: 80
+    bb_width_percentile_min: 80
+    sl_atr_mult: 2.0
+    tp_atr_mult: 4.0
+    time_exit_bars: 10
+    max_leverage: 1.5
+  
+  low_volatility:
+    atr_percentile_max: 20
+    bb_width_percentile_max: 20
+    max_leverage: 1.0
+
+regime_confidence:
+  min_probability: 0.6
+  hysteresis:
+    enter_threshold: 0.6
+    exit_threshold: 0.45
+  confidence_boost:
+    trend: 1.2
+    mean_reversion: 1.0
+    high_vol: 0.8
+    low_vol: 0.8
+
+regime_gate:
+  enabled: true
+  block_counter_trend: true
+  allow_range_in_trend: false
+  allow_trend_in_range: false
+
+position_sizing:
+  base_method: "risk_parity"
+  regime_adjustments:
+    trend_bull: 1.2
+    trend_bear: 1.2
+    mean_reversion: 1.0
+    high_volatility: 0.5
+    low_volatility: 1.0
+
+risk_limits:
+  max_drawdown_pct: 10.0
+  max_daily_loss_pct: 5.0
+  max_position_exposure: 0.05
+  max_total_exposure: 0.60
+  max_correlation: 0.70
+
+regime_change_handling:
+  on_regime_change:
+    close_counter_positions: true
+    flatten_portfolio: false
+    rebalance: true
+  transition_bars: 3
+
+outputs:
+  - name: "strategy_signals"
+    type: "DataFrame"
+    description: "Regime-adaptive signals"
+    columns: ["timestamp", "signal", "regime", "confidence", "entry", "stop_loss", "take_profit", "size"]
+  - name: "regime_stats"
+    type: "dict"
+    description: "Statistics per regime"
+  - name: "transition_log"
+    type: "DataFrame"
+    description: "Regime transition history"
+  - name: "regime_performance"
+    type: "dict"
+    description: "PnL and stats per regime"
+
+outputs_format:
+  strategy_signals:
+    columns: ["timestamp", "signal", "regime", "confidence", "entry", "stop_loss", "take_profit", "size"]
+    dtypes: ["datetime64", "string", "string", "float64", "float64", "float64", "float64"]
+  regime_stats:
+    type: "dict"
+    keys: ["regime", "duration", "trades", "pnl", "win_rate", "pf"]
+  transition_log:
+    columns: ["timestamp", "from_regime", "to_regime", "trigger"]
+    dtypes: ["datetime64", "string", "string", "string"]
+
+execution:
+  command: "uv run python -m src.regime_strategy --data {data} --symbol {symbol}"
+  timeout: 300
+  retries: 1
+  requirements:
+    - "pandas"
+    - "numpy"
+    - "scikit-learn"
+    - "hmmlearn"
+
+validation:
+  - name: "regime_coverage"
+    check: "all timestamps have regime label"
+    error: "Missing regime labels"
+  - name: "transition_validity"
+    check: "no invalid transitions per transition_matrix"
+    error: "Invalid regime transition"
+  - name: "min_regime_duration"
+    check: "min_regime_duration >= 3 bars"
+    error: "Regime too short"
+  - name: "signal_consistency"
+    check: "signal matches regime logic"
+    error: "Signal contradicts regime"
+
+examples:
+  - description: "Run regime-adaptive strategy on BTC/USDT 4h"
+    inputs:
+      regime_labels: "btc_4h_regimes"
+      market_data: "btcusdt_4h_prepared"
+    expected_outcome: "regime_adaptive_signals with regime-specific logic"
+
+notes: |
+  This skill implements the REGIME-ADAPTIVE STRATEGY pattern.
+  It replaces the single-strategy approach with regime-conditional logic.
+  Each regime has its own specialized sub-strategy with regime-specific parameters.
+  Regime classification comes from the Regime Detection skill (quantai-regime-detection).
+  This is the CORE strategy skill for production deployment.
+
+(End of file - total 320 lines)

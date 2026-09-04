@@ -80,8 +80,8 @@ def make_candle(
 def make_signal(
     signal: str = "BUY",
     entry: float = 100.0,
-    stop_loss: float = 98.0,
-    take_profit: float = 104.0,
+    stop_loss: float = 80.0,  # 20% stop distance for 5% exposure with 1% risk
+    take_profit: float = 140.0,  # 40% target for 7:1 R:R
     confidence: float = 80.0,
 ) -> SignalResult:
     """
@@ -343,8 +343,8 @@ def test_open_sell_position():
 
     signal = make_signal(
         signal="SELL",
-        stop_loss=102.0,
-        take_profit=96.0,
+        stop_loss=120.0,  # 20% stop for 5% exposure
+        take_profit=60.0,   # 40% target for 7:1 R:R
     )
 
     result = engine.open_position(
@@ -383,8 +383,8 @@ def test_open_position_has_correct_risk_levels():
     signal = make_signal(
         signal="BUY",
         entry=100.0,
-        stop_loss=98.0,
-        take_profit=104.0,
+        stop_loss=80.0,
+        take_profit=140.0,
     )
 
     engine.open_position(
@@ -395,11 +395,11 @@ def test_open_position_has_correct_risk_levels():
     position = engine.positions[0]
 
     assert position.stop_loss == pytest.approx(
-        98.0
+        80.0
     )
 
     assert position.take_profit == pytest.approx(
-        104.0
+        140.0
     )
 
     assert position.confidence == pytest.approx(
@@ -477,8 +477,8 @@ def test_close_buy_position_with_profit():
     signal = make_signal(
         signal="BUY",
         entry=100.0,
-        stop_loss=98.0,
-        take_profit=104.0,
+        stop_loss=80.0,
+        take_profit=140.0,
     )
 
     engine.open_position(
@@ -491,14 +491,14 @@ def test_close_buy_position_with_profit():
     initial_balance = engine.balance
 
     exit_candle = make_candle(
-        price=104.0,
+        price=140.0,
         timestamp="2025-01-01 01:00:00",
     )
 
     engine.close_position(
         position,
         exit_candle,
-        104.0,
+        140.0,
         CloseReason.TAKE_PROFIT,
     )
 
@@ -539,8 +539,8 @@ def test_close_buy_position_with_loss():
     signal = make_signal(
         signal="BUY",
         entry=100.0,
-        stop_loss=98.0,
-        take_profit=104.0,
+        stop_loss=80.0,
+        take_profit=140.0,
     )
 
     engine.open_position(
@@ -553,14 +553,14 @@ def test_close_buy_position_with_loss():
     initial_balance = engine.balance
 
     exit_candle = make_candle(
-        price=98.0,
+        price=80.0,
         timestamp="2025-01-01 01:00:00",
     )
 
     engine.close_position(
         position,
         exit_candle,
-        98.0,
+        80.0,
         CloseReason.STOP_LOSS,
     )
 
@@ -593,8 +593,8 @@ def test_close_sell_position_with_profit():
     signal = make_signal(
         signal="SELL",
         entry=100.0,
-        stop_loss=102.0,
-        take_profit=96.0,
+        stop_loss=120.0,
+        take_profit=60.0,
     )
 
     engine.open_position(
@@ -607,14 +607,14 @@ def test_close_sell_position_with_profit():
     initial_balance = engine.balance
 
     exit_candle = make_candle(
-        price=96.0,
+        price=60.0,
         timestamp="2025-01-01 01:00:00",
     )
 
     engine.close_position(
         position,
         exit_candle,
-        96.0,
+        60.0,
         CloseReason.TAKE_PROFIT,
     )
 
@@ -643,8 +643,8 @@ def test_close_sell_position_with_loss():
     signal = make_signal(
         signal="SELL",
         entry=100.0,
-        stop_loss=102.0,
-        take_profit=96.0,
+        stop_loss=120.0,
+        take_profit=60.0,
     )
 
     engine.open_position(
@@ -657,14 +657,14 @@ def test_close_sell_position_with_loss():
     initial_balance = engine.balance
 
     exit_candle = make_candle(
-        price=102.0,
+        price=120.0,
         timestamp="2025-01-01 01:00:00",
     )
 
     engine.close_position(
         position,
         exit_candle,
-        102.0,
+        120.0,
         CloseReason.STOP_LOSS,
     )
 
@@ -1042,12 +1042,13 @@ def test_end_of_backtest_closes_open_position():
     # We manually create an open position first.
 
     candle = df.iloc[250]
-
+    entry_price = float(candle["close"])
+    # 20% stop for 5% exposure, 40% target for 7:1 R:R
     signal = make_signal(
         signal="BUY",
-        entry=float(candle["close"]),
-        stop_loss=float(candle["close"]) - 2.0,
-        take_profit=float(candle["close"]) + 4.0,
+        entry=entry_price,
+        stop_loss=entry_price * 0.8,
+        take_profit=entry_price * 1.4,
     )
 
     engine.open_position(

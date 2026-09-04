@@ -1,0 +1,232 @@
+# QuantAI Model Validation Skill
+# Comprehensive model validation including PurgedKFold CV, calibration, feature stability, and drift detection
+
+metadata:
+  name: "QuantAI Model Validation"
+  category: "quantai"
+  phase: "validation"
+  required: true
+  version: "1.0.0"
+  author: "QuantAI Team"
+  description: |
+    Comprehensive model validation including PurgedKFold CV, calibration, 
+    feature stability, drift detection, and production readiness checks.
+    Essential for ensuring ML models generalize to unseen data.
+
+inputs:
+  - name: "model"
+    type: "object"
+    description: "Trained model object (sklearn/xgboost/lightgbm/catboost compatible)"
+    required: true
+  - name: "X"
+    type: "DataFrame"
+    description: "Feature matrix"
+    required: true
+  - name: "y"
+    type: "Series"
+    description: "Target variable (-1: SELL, 0: HOLD, 1: BUY)"
+    required: true
+  - name: "tb_t1"
+    type: "Series"
+    description: "Event end times for PurgedKFold"
+    required: false
+  - name: "feature_names"
+    type: "list"
+    description: "Feature names in order"
+    required: false
+
+cv_config:
+  cv_type: "combinatorial"
+  n_splits: 5
+  embargo_pct: 0.01
+  purge_pct: 0.0
+  n_test_folds: 2
+  regime_aware: false
+  regime_min_samples: 150
+  n_test_folds: 2
+
+validation_metrics:
+  classification:
+    - "balanced_accuracy"
+    - "f1_macro"
+    - "f1_weighted"
+    - "precision_macro"
+    - "recall_macro"
+    - "roc_auc_ovr"
+    - "log_loss"
+    - "brier_score"
+  regression:
+    - "mse"
+    - "mae"
+    - "r2"
+    - "explained_variance"
+  calibration:
+    - "calibration_curve"
+    - "reliability_diagram"
+    - "ece"  # Expected Calibration Error
+    - "mce"  # Maximum Calibration Error
+  ranking:
+    - "ndcg"
+    - "map"
+    - "mrr"
+
+purged_kfold:
+  cv_type: "combinatorial"
+  n_splits: 5
+  embargo_pct: 0.01
+  purge_pct: 0.0
+  n_test_folds: 2
+  gap_based_on_tb_t1: true
+  description: |
+    Uses event end times (tb_t1) for true event-based purging.
+    Falls back to index-based if tb_t1 not provided.
+
+calibration:
+  methods:
+    - "isotonic"
+    - "platt"
+    - "beta"
+  evaluation:
+    - "reliability_curve"
+    - "calibration_curve"
+    - "ece_thresholds: [0.01, 0.05, 0.1]"
+    - "reliability_bins: 10"
+
+feature_stability:
+  methods:
+    - "permutation_importance_cv"
+    - "shap_values_cv"
+    - "feature_correlation_stability"
+    - "psi"  # Population Stability Index
+  thresholds:
+    feature_importance_cv: 0.3
+    psi_threshold: 0.2
+    correlation_stability: 0.7
+
+drift_detection:
+  methods:
+    - "psi"  # Population Stability Index
+    - "ks_test"  # Kolmogorov-Smirnov
+    - "chi_square"
+    - "wasserstein_distance"
+  thresholds:
+    psi: 0.2
+    ks_pvalue: 0.05
+    wasserstein: 0.1
+  monitoring:
+    reference_window: 1000
+    detection_window: 100
+    alert_threshold: 0.05
+
+overfitting_detection:
+  methods:
+    - name: "train_vs_oos_gap"
+      check: "train_score - oos_score < 0.15"
+    - name: "param_stability"
+      check: "param_cv < 0.3"
+    - name: "performance_decay"
+      check: "oos_sharpe_trend >= -0.1"
+    - name: "trade_frequency_stability"
+      check: "trade_count_cv < 0.5"
+
+feature_importance:
+  methods:
+    - "permutation"
+    - "shap"
+    - "gain"
+    - "cover"
+    - "frequency"
+  top_k: 20
+  stability_check:
+    cv: true
+    threshold: 0.3
+
+outputs:
+  - name: "validation_report"
+    type: "dict"
+    description: "Complete validation report with all metrics"
+  - name: "cv_metrics"
+    type: "DataFrame"
+    description: "Per-fold CV metrics"
+    columns: ["fold", "balanced_accuracy", "f1_macro", "precision", "recall", "roc_auc", "log_loss"]
+  - name: "calibration_report"
+    type: "dict"
+    description: "Calibration metrics and curves"
+  - name: "feature_importance"
+    type: "DataFrame"
+    description: "Feature importance with stability metrics"
+    columns: ["feature", "importance", "cv_mean", "cv_std", "cv", "stable"]
+  - name: "drift_report"
+    type: "dict"
+    description: "Drift detection results"
+  - name: "overfitting_report"
+    type: "dict"
+    description: "Overfitting detection results"
+  - name: "calibration_curves"
+    type: "dict"
+    description: "Reliability diagrams data"
+
+outputs_format:
+  cv_metrics:
+    type: "DataFrame"
+    columns: ["fold", "balanced_accuracy", "f1_macro", "precision_macro", "recall_macro", "roc_auc", "log_loss"]
+    dtypes: ["int", "float64", "float64", "float64", "float64", "float64", "float64"]
+  feature_importance:
+    columns: ["feature", "importance", "cv_mean", "cv_std", "cv", "stable"]
+    dtypes: ["string", "float64", "float64", "float64", "float64", "bool"]
+  drift_report:
+    type: "dict"
+    keys: ["psi", "ks_pvalue", "wasserstein", "drifted_features"]
+  overfitting_report:
+    type: "dict"
+    keys: ["train_oos_gap", "param_cv", "performance_decay", "trade_freq_stability"]
+
+execution:
+  command: "uv run python -m src.model_validation --model {model} --data {data}"
+  timeout: 3600
+  retries: 0
+  requirements:
+    - "scikit-learn"
+    - "xgboost"
+    - "lightgbm"
+    - "catboost"
+    - "shap"
+    - "optuna"
+    - "scipy"
+
+validation:
+  - name: "cv_metrics_valid"
+    check: "all folds have valid metrics"
+    error: "Some CV folds failed"
+  - name: "calibration_valid"
+    check: "ece < 0.1"
+    error: "Model poorly calibrated"
+  - name: "stability_passed"
+    check: "feature_cv < 0.3 and psi < 0.2"
+    error: "Feature importance not stable"
+  - name: "no_overfitting"
+    check: "train_oos_gap < 0.15 and param_cv < 0.3"
+    error: "Overfitting detected"
+  - name: "calibration_passed"
+    check: "ece < 0.1"
+    error: "Poor calibration"
+  - name: "drift_detected"
+    check: "no features with psi > 0.2"
+    warning: "Feature drift detected"
+
+examples:
+  - description: "Validate XGBoost model on BTC/USDT 15m"
+    inputs:
+      model: "xgboost_btc_15m.pkl"
+      X: "features_btc_15m"
+      y: "target_btc_15m"
+      tb_t1: "tb_t1_btc_15m"
+    expected_outcome: "validation_report with all checks passed"
+
+notes: |
+  This skill is MANDATORY for model validation phase.
+  Uses PurgedKFold CV with event-based purging.
+  Includes calibration, feature stability, drift detection, and overfitting detection.
+  Results feed directly into model promotion gate.
+
+(End of file - total 250 lines)

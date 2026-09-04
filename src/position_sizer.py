@@ -21,9 +21,26 @@ class PositionSizeResult:
 class PositionSizer:
     def __init__(
         self,
-        min_leverage: float = 1.0,
-        max_leverage: float = 50.0,
+        min_leverage: float | None = None,
+        max_leverage: float | None = None,
+        policy: Any = None,
     ) -> None:
+        # P0.6 Strict: No Policy -> No Sizer — max_leverage default is None, no 50x fallback
+        if policy is not None:
+            if min_leverage is None:
+                min_leverage = float(getattr(policy, "min_leverage", 1.0))
+            if max_leverage is None:
+                max_leverage = float(getattr(policy, "max_leverage", 3.0))
+        if min_leverage is None:
+            min_leverage = 1.0
+        if max_leverage is None:
+            raise ValueError("PositionSizer requires explicit RiskPolicy (Production/Research) or max_leverage — No Policy -> No Sizer (P0.6). max_leverage default is None, no 50x fallback.")
+        if max_leverage == 50.0:
+            import warnings
+            warnings.warn("max_leverage 50x is dangerous and deprecated — use RiskPolicy production 3x / research 10x", UserWarning, stacklevel=2)
+        if max_leverage == 50.0:
+            import warnings
+            warnings.warn("max_leverage 50x is dangerous and deprecated — use RiskPolicy production 3x / research 10x", UserWarning, stacklevel=2)
         if min_leverage <= 0:
             raise ValueError(
                 "min_leverage must be greater than zero."

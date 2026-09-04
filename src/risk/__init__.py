@@ -43,6 +43,49 @@ from src.risk.dynamic_risk_budget import (
     RiskBudgetManager,
 )
 
+# Task 7: Factor Risk (canonical)
+try:
+    from src.risk.factor_risk import (
+        FactorRiskReport,
+        FactorGateResult,
+        DEFAULT_CRYPTO_FACTOR_MAP,
+        compute_gross_exposure,
+        compute_net_exposure,
+        gross_exposure,
+        net_exposure,
+        compute_beta,
+        beta_to_market,
+        compute_portfolio_beta,
+        compute_net_beta_exposure,
+        crypto_beta,
+        compute_factor_exposure,
+        factor_exposure,
+        compute_factor_concentration,
+        factor_concentration,
+        herfindahl_index,
+        max_factor_weight,
+        compute_correlation_adjusted_exposure,
+        correlation_adjusted_exposure as factor_correlation_adjusted_exposure,
+        compute_factor_risk,
+        assess_factor_risk,
+        check_factor_risk_gate,
+    )
+except Exception:  # pragma: no cover
+    pass
+
+from src.risk.correlation import (
+    CorrelationExposure,
+    correlation_adjusted_exposure,
+    compute_gross_exposure as corr_gross_exposure,
+    compute_net_exposure as corr_net_exposure,
+    compute_beta as corr_compute_beta,
+    beta_to_market as corr_beta_to_market,
+    compute_portfolio_beta as corr_compute_portfolio_beta,
+    compute_factor_exposure as corr_compute_factor_exposure,
+    compute_factor_concentration as corr_compute_factor_concentration,
+    liquidation_distance,
+)
+
 __all__ = [
     # Kelly Criterion
     "KellyFraction",
@@ -67,6 +110,35 @@ __all__ = [
     "RiskBudgetMode",
     "RiskBudget",
     "RiskBudgetManager",
+
+    # Factor Risk (Task 7)
+    "FactorRiskReport",
+    "FactorGateResult",
+    "DEFAULT_CRYPTO_FACTOR_MAP",
+    "compute_gross_exposure",
+    "compute_net_exposure",
+    "gross_exposure",
+    "net_exposure",
+    "compute_beta",
+    "beta_to_market",
+    "compute_portfolio_beta",
+    "compute_net_beta_exposure",
+    "crypto_beta",
+    "compute_factor_exposure",
+    "factor_exposure",
+    "compute_factor_concentration",
+    "factor_concentration",
+    "herfindahl_index",
+    "max_factor_weight",
+    "compute_correlation_adjusted_exposure",
+    "factor_correlation_adjusted_exposure",
+    "compute_factor_risk",
+    "assess_factor_risk",
+    "check_factor_risk_gate",
+    # Correlation (legacy re-export)
+    "CorrelationExposure",
+    "correlation_adjusted_exposure",
+    "liquidation_distance",
 ]
 
 __version__ = "5.1.0"

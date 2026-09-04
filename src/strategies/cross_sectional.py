@@ -12,6 +12,12 @@ This module has its own compact vectorized backtester because the
 single-symbol TradeEngine cannot express cross-sectional portfolios.
 Results are shaped to plug into the R4 champion contract
 (same window-aggregation schema as evaluate_candidate).
+
+FIX task-6: separate portfolio observations vs actual fills / round trips.
+  - n_observations / n_fills  = asset-slot exposure (vectorized)
+  - actual_trades / pf_on_fills / win_rate_on_fills = real completed
+    round trips (entry->exit per asset, cost inclusive). Integrity gates
+    must use round trips, not slot activity.
 """
 
 from __future__ import annotations
@@ -79,7 +85,20 @@ def backtest(prices: pd.DataFrame, params: CrossSectionParams) -> dict:
     Returns dict with:
         equity      Series (net, starts at 1.0)
         periods     list[dict] per holding period
-        stats       {total_ret_pct, maxdd_pct, sharpe, pf, trades, wins}
+        fills       list[dict] per completed round-trip (actual fills)
+        stats       {total_ret_pct, maxdd_pct, sharpe, pf, trades, wins,
+                    n_observations, n_fills, fill_rate, actual_trades,
+                    pf_on_fills, win_rate_on_fills, ... }
+
+    Trade accounting (task-6):
+        - portfolio_rebalance_observations = len(periods)  (rebalance decisions)
+        - n_observations = portfolio_slot_observations = len(periods) * top_k
+          (max possible asset-slot exposures, vectorized view)
+        - n_fills = actual slot exposures held (sum len(picked) for non-flat)
+        - actual_trades = completed round trips per asset (entry->exit with
+          costs, comparable to TradeEngine.closed_positions)
+        - pf_on_fills / win_rate_on_fills derived from round-trip nets
+          (gross price change - fee*2), comparable to single-asset PF.
     """
     p = params
     prices = prices.sort_index()
@@ -93,6 +112,36 @@ def backtest(prices: pd.DataFrame, params: CrossSectionParams) -> dict:
     periods: list[dict] = []
     prev_weights: dict[str, float] = {}
     in_dd_pause = False
+
+    # --- task-6: round-trip tracking ---
+    # active: symbol -> {entry_price, entry_time}
+    active_positions: dict[str, dict] = {}
+    closed_trades: list[dict] = []
+
+    def _close_position(sym: str, exit_price: float, exit_time) -> None:
+        entry = active_positions.pop(sym, None)
+        if entry is None:
+            return
+        entry_price = float(entry["entry_price"])
+        if entry_price <= 0 or not np.isfinite(entry_price) or not np.isfinite(exit_price):
+            return
+        gross = float(exit_price / entry_price - 1.0)
+        # Round-trip cost: entry + exit, fee_per_side each.  Using full
+        # fee*2 keeps pf comparable to single-asset TradeEngine where each
+        # trade pays commission+slippage on full notional.  Weight/scale
+        # effects stay in equity curve (basket PF), not in per-trade PF.
+        cost = float(p.fee_per_side * 2.0)
+        net = float(gross - cost)
+        closed_trades.append({
+            "symbol": sym,
+            "entry_price": entry_price,
+            "exit_price": float(exit_price),
+            "entry_time": entry["entry_time"],
+            "exit_time": exit_time,
+            "gross": gross,
+            "cost": cost,
+            "net": net,
+        })
 
     t = p.lookback_days
     while t < n - 1:
@@ -114,6 +163,14 @@ def backtest(prices: pd.DataFrame, params: CrossSectionParams) -> dict:
         mom = (row_now / row_past - 1.0).dropna()
 
         if len(mom) == 0 or in_dd_pause:
+            # flat: close all active positions at this rebalance price
+            if active_positions:
+                for sym in list(active_positions.keys()):
+                    try:
+                        px = float(prices.iloc[t][sym])
+                    except Exception:
+                        px = float(active_positions[sym]["entry_price"])
+                    _close_position(sym, px, prices.index[t])
             equity.append(equity[-1])          # flat bar (cash)
             periods.append({
                 "start": prices.index[t],
@@ -129,6 +186,31 @@ def backtest(prices: pd.DataFrame, params: CrossSectionParams) -> dict:
             continue
 
         picked = list(mom.nlargest(min(p.top_k, len(mom))).index)
+
+        # ---- round-trip open/close tracking (causal, at rebalance time t) ----
+        # Close symbols that are no longer picked
+        for sym in list(active_positions.keys()):
+            if sym not in picked:
+                try:
+                    px = float(prices.iloc[t][sym])
+                except Exception:
+                    # if price missing, use entry (no PnL)
+                    px = float(active_positions[sym]["entry_price"])
+                _close_position(sym, px, prices.index[t])
+
+        # Open newly picked symbols
+        for sym in picked:
+            if sym not in active_positions:
+                try:
+                    entry_px = float(prices.iloc[t][sym])
+                except Exception:
+                    continue
+                if not np.isfinite(entry_px) or entry_px <= 0:
+                    continue
+                active_positions[sym] = {
+                    "entry_price": entry_px,
+                    "entry_time": prices.index[t],
+                }
 
         # ---- intra-basket weights (causal) ----
         if p.weighting == "inv_vol":
@@ -190,9 +272,20 @@ def backtest(prices: pd.DataFrame, params: CrossSectionParams) -> dict:
 
         t += p.rebalance_days
 
+    # --- close any still-open positions at final bar (END_OF_BACKTEST) ---
+    if active_positions:
+        final_idx = n - 1
+        final_time = prices.index[final_idx]
+        for sym in list(active_positions.keys()):
+            try:
+                px = float(prices.iloc[final_idx][sym])
+            except Exception:
+                px = float(active_positions[sym]["entry_price"])
+            _close_position(sym, px, final_time)
+
     eq = pd.Series(equity[1:] if len(equity) > 1 else equity,
                    index=[per["end"] for per in periods]) if periods else \
-          pd.Series([1.0], index=[prices.index[-1]])
+           pd.Series([1.0], index=[prices.index[-1]])
 
     total_ret = (eq.iloc[-1] / 1.0 - 1.0) * 100.0 if len(eq) else 0.0
 
@@ -211,27 +304,62 @@ def backtest(prices: pd.DataFrame, params: CrossSectionParams) -> dict:
     else:
         sharpe = 0.0
 
-    pos_sum = nets[nets > 0].sum() if len(nets) else 0.0
-    neg_sum = abs(nets[nets < 0].sum()) if len(nets) else 0.0
-    pf = pos_sum / neg_sum if neg_sum > 0 else (99.0 if pos_sum > 0 else 0.0)
+    # ---- portfolio-level PF (basket period nets) - for transparency ---
+    pos_sum_period = nets[nets > 0].sum() if len(nets) else 0.0
+    neg_sum_period = abs(nets[nets < 0].sum()) if len(nets) else 0.0
+    pf_period = pos_sum_period / neg_sum_period if neg_sum_period > 0 else (99.0 if pos_sum_period > 0 else 0.0)
 
-    trades = len(periods) * p.top_k              # asset-slot activity metric
-    slot_rets = []
-    for per in periods:
-        slot_rets.extend([per["net"]] * p.top_k)  # conservative slot proxy
-    wins = int(sum(1 for r in slot_rets if r > 0))
+    # ---- slot-level observations vs fills (vectorized view) ----
+    n_periods = len(periods)
+    n_flat = sum(1 for per in periods if per.get("flat"))
+    n_observations = n_periods * p.top_k
+    n_fills = int(sum(len(per["picked"]) for per in periods if not per.get("flat")))
+    # portfolio_rebalance_observations is n_periods (decision count)
+    portfolio_rebalance_observations = n_periods
+    fill_rate = float(n_fills / n_observations) if n_observations else 0.0
 
+    # ---- round-trip actual fills (comparable to TradeEngine) ----
+    actual_trades = len(closed_trades)
+    wins_on_fills = int(sum(1 for tr in closed_trades if tr["net"] > 0))
+    losses_on_fills = actual_trades - wins_on_fills
+    win_rate_on_fills = float(100.0 * wins_on_fills / actual_trades) if actual_trades else 0.0
+
+    pos_sum_fills = sum(tr["net"] for tr in closed_trades if tr["net"] > 0)
+    neg_sum_fills = abs(sum(tr["net"] for tr in closed_trades if tr["net"] < 0))
+    pf_on_fills = float(pos_sum_fills / neg_sum_fills) if neg_sum_fills > 0 else (99.0 if pos_sum_fills > 0 else 0.0)
+
+    # Legacy slot proxy kept for reference under different key
+    # but primary 'trades' / 'wins' / 'pf' now reflect round trips for gate
     stats_out = {
         "total_ret_pct": round(total_ret, 4),
         "maxdd_pct": round(maxdd, 4),
         "sharpe": round(sharpe, 3),
-        "pf": round(pf, 3),
-        "trades": trades,
-        "wins": wins,
-        "periods_n": len(periods),
+        # --- primary gate-facing (round trips) ---
+        "pf": round(pf_on_fills, 3),
+        "trades": actual_trades,
+        "wins": wins_on_fills,
+        "win_rate": round(win_rate_on_fills, 2),
+        # --- explicit round-trip metrics ---
+        "pf_on_fills": round(pf_on_fills, 3),
+        "win_rate_on_fills": round(win_rate_on_fills, 2),
+        "wins_on_fills": wins_on_fills,
+        "losses_on_fills": losses_on_fills,
+        "actual_trades": actual_trades,
+        # --- slot / observation metrics ---
+        "n_observations": n_observations,
+        "n_fills": n_fills,
+        "fill_rate": round(fill_rate, 4),
+        "portfolio_rebalance_observations": portfolio_rebalance_observations,
+        "n_periods": n_periods,
+        "n_flat_periods": n_flat,
+        "periods_n": n_periods,
+        # --- legacy basket PF for transparency ---
+        "pf_period": round(pf_period, 3),
+        "slot_observations": n_observations,
+        "slot_fills": n_fills,
     }
 
-    return {"equity": eq, "periods": periods, "stats": stats_out}
+    return {"equity": eq, "periods": periods, "fills": closed_trades, "stats": stats_out}
 
 
 __all__ = ["CrossSectionParams", "backtest"]

@@ -1,0 +1,23 @@
+[importlinter]
+root_package = src
+
+[importlinter:contract:layers]
+name = QuantAI 5 Layers — Governance never bypasses Risk/Execution (Audit §34)
+type = layers
+layers =
+    src.data
+    src.research
+    src.risk
+    src.execution
+    src.control_plane
+    src.champion
+containers =
+    src.data
+    src.research
+    src.risk
+    src.execution
+    src.control_plane
+    src.champion
+
+# Forbidden: control_plane/champion → execution/risk direct bypass
+# Allowed: control_plane → risk.orchestrator only via facade, not direct position open

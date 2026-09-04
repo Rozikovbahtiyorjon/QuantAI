@@ -161,9 +161,11 @@ def create_ml_train_callback(
         y = dataset["target"].astype(int)
         
         X = dataset.drop(
-            columns=["target", "future_return", "index"],
+            columns=["target", "future_return", "index", "tb_barrier", "tb_t1"],
             errors="ignore",
         )
+        # Keep only numeric features (tb_barrier is string diagnostic)
+        X = X.select_dtypes(include=["number"])
         
         # QuantAI → XGBoost class mapping
         y_xgb = y.replace({-1: 0, 0: 1, 1: 2})

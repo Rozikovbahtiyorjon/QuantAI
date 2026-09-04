@@ -1,8 +1,8 @@
 """
-====================================================
+======================================================
 QuantAI Professional
 Purged K-Fold Cross-Validation
-====================================================
+======================================================
 
 PurgedKFold implementation based on López de Prado
 "Advances in Financial Machine Learning" (Ch. 7).
@@ -13,7 +13,12 @@ Prevents data leakage in time-series ML by:
 
 For financial data with future_bars=5 prediction horizon,
 embargo should be >= 5 to prevent autocorrelation leakage.
-====================================================
+
+Event-based purging (López de Prado Ch. 7):
+- Each sample has an event end time (tb_t1)
+- Training samples whose label window overlaps with test period are purged
+- Embargo adds a time gap after test period
+======================================================
 """
 
 from __future__ import annotations
@@ -39,6 +44,10 @@ class PurgedKFold(BaseCrossValidator):
     purge_pct : float, default=0.0
         Additional purge percentage. Removes training samples that
         have labels overlapping with test period.
+
+    Event-based purging (López de Prado):
+    - If tb_t1 is provided (event end times), uses true event-based purging
+    - Otherwise falls back to index-based purge_pct/embargo_pct
     """
 
     def __init__(
@@ -71,6 +80,7 @@ class PurgedKFold(BaseCrossValidator):
         X: np.ndarray,
         y: Optional[np.ndarray] = None,
         groups: Optional[np.ndarray] = None,
+        tb_t1: Optional[np.ndarray] = None,
     ) -> Iterator[Tuple[np.ndarray, np.ndarray]]:
         """
         Generate indices to split data into training and test set.
@@ -83,6 +93,9 @@ class PurgedKFold(BaseCrossValidator):
             Target variable.
         groups : array-like of shape (n_samples,), optional
             Group labels for the samples.
+        tb_t1 : array-like of shape (n_samples,), optional
+            Event end times for each sample (for event-based purging).
+            If provided, uses true event-based purging instead of index-based.
 
         Yields
         ------
@@ -94,7 +107,7 @@ class PurgedKFold(BaseCrossValidator):
         n_samples = X.shape[0]
         indices = np.arange(n_samples)
 
-        # Calculate embargo and purge sizes in samples
+        # Calculate embargo and purge sizes in samples (fallback)
         embargo = int(n_samples * self.embargo_pct)
         purge = int(n_samples * self.purge_pct)
 
@@ -105,27 +118,61 @@ class PurgedKFold(BaseCrossValidator):
         # Last fold takes remaining samples
         test_ends[-1] = n_samples
 
+        # Event-based purging requires tb_t1
+        use_event_purging = tb_t1 is not None and len(tb_t1) == n_samples
+
         for test_start, test_end in zip(test_starts, test_ends):
             # Test indices
             test_idx = indices[test_start:test_end]
 
-            # Embargo: gap after test set
-            embargo_start = test_end
-            embargo_end = min(test_end + embargo, n_samples)
+            if use_event_purging:
+                # Event-based purging using tb_t1
+                # Test period spans from first to last timestamp in test set
+                test_t0 = tb_t1[test_idx[0]]
+                test_t1 = tb_t1[test_idx[-1]]
 
-            # Purge: remove training samples whose labels overlap with test
-            # For financial ML, labels are typically based on future returns
-            # So we purge samples from (test_start - purge) to test_end
-            purge_start = max(0, test_start - purge)
-            purge_end = test_end
+                # Embargo: gap after test period (in time)
+                embargo_end_time = test_t1 + (test_t1 - test_t0) * self.embargo_pct
 
-            # Training indices: everything except test + embargo + purge
-            train_mask = np.ones(n_samples, dtype=bool)
-            train_mask[test_idx] = False
-            train_mask[embargo_start:embargo_end] = False
-            train_mask[purge_start:purge_end] = False
+                # Purge: remove training samples whose tb_t1 overlaps with test period
+                # A training sample's label window is [t0, t1]
+                # It overlaps if its tb_t1 > test_t0 and its t0 < test_t1
+                # For simplicity, we purge samples whose tb_t1 >= test_t0
+                # and whose index is before test_end
+                train_mask = np.ones(n_samples, dtype=bool)
+                train_mask[test_idx] = False
+                
+                # Embargo mask: samples with index >= test_end and < embargo period
+                # For time-based embargo, we'd need actual timestamps
+                # Here we use index-based as approximation for embargo
+                embargo_start = test_end
+                embargo_end = min(test_end + embargo, n_samples)
+                train_mask[embargo_start:embargo_end] = False
 
-            train_idx = indices[train_mask]
+                # Purge mask: samples whose tb_t1 overlaps with test period
+                # A sample overlaps if its tb_t1 >= test_t0 and its timestamp < test_t1
+                # We approximate by purging samples whose tb_t1 >= test_t0
+                # and whose index is before test_end
+                purge_mask = (tb_t1 >= test_t0) & (indices < test_end)
+                train_mask[purge_mask] = False
+
+                train_idx = indices[train_mask]
+            else:
+                # Fallback to index-based purging
+                # Embargo: gap after test set
+                embargo_start = test_end
+                embargo_end = min(test_end + embargo, n_samples)
+
+                # Purge: remove training samples whose labels overlap with test
+                purge_start = max(0, test_start - purge)
+                purge_end = test_end
+
+                train_mask = np.ones(n_samples, dtype=bool)
+                train_mask[test_idx] = False
+                train_mask[embargo_start:embargo_end] = False
+                train_mask[purge_start:purge_end] = False
+
+                train_idx = indices[train_mask]
 
             if len(train_idx) == 0 or len(test_idx) == 0:
                 continue
@@ -190,9 +237,11 @@ class CombinatorialPurgedKFold(BaseCrossValidator):
         X: np.ndarray,
         y: Optional[np.ndarray] = None,
         groups: Optional[np.ndarray] = None,
+        tb_t1: Optional[np.ndarray] = None,
     ) -> Iterator[Tuple[np.ndarray, np.ndarray]]:
         """
         Generate combinatorial splits with purging/embargo.
+        Supports event-based purging when tb_t1 is provided.
         """
         n_samples = X.shape[0]
         indices = np.arange(n_samples)
@@ -208,6 +257,8 @@ class CombinatorialPurgedKFold(BaseCrossValidator):
         embargo = int(n_samples * self.embargo_pct)
         purge = int(n_samples * self.purge_pct)
 
+        use_event_purging = tb_t1 is not None and len(tb_t1) == n_samples
+
         for test_fold_indices in combinations(range(self.n_splits), self.n_test_folds):
             # Combine selected folds for test set
             test_idx_list = []
@@ -215,25 +266,38 @@ class CombinatorialPurgedKFold(BaseCrossValidator):
                 test_idx_list.append(indices[fold_starts[fi]:fold_ends[fi]])
             test_idx = np.concatenate(test_idx_list)
 
-            # Embargo after each test fold
-            embargo_mask = np.zeros(n_samples, dtype=bool)
-            for fi in test_fold_indices:
-                emb_start = fold_ends[fi]
-                emb_end = min(fold_ends[fi] + embargo, n_samples)
-                embargo_mask[emb_start:emb_end] = True
-
-            # Purge before each test fold
-            purge_mask = np.zeros(n_samples, dtype=bool)
-            for fi in test_fold_indices:
-                pur_start = max(0, fold_starts[fi] - purge)
-                pur_end = fold_ends[fi]
-                purge_mask[pur_start:pur_end] = True
-
-            # Training mask
             train_mask = np.ones(n_samples, dtype=bool)
             train_mask[test_idx] = False
-            train_mask[embargo_mask] = False
-            train_mask[purge_mask] = False
+
+            if tb_t1 is not None and len(tb_t1) == n_samples:
+                # Event-based purging using tb_t1
+                test_t0 = tb_t1[test_idx[0]]
+                test_t1 = tb_t1[test_idx[-1]]
+
+                # Embargo after test period (index-based approximation)
+                embargo_start = test_idx[-1] + 1
+                embargo_end = min(embargo_start + int(len(test_idx) * self.embargo_pct), n_samples)
+                train_mask[embargo_start:embargo_end] = False
+
+                # Purge: remove training samples whose tb_t1 overlaps with test period
+                purge_mask = (tb_t1 >= tb_t1[test_idx[0]]) & (indices < test_idx[-1])
+                train_mask[purge_mask] = False
+            else:
+                # Index-based purging
+                embargo_mask = np.zeros(n_samples, dtype=bool)
+                for fi in test_fold_indices:
+                    emb_start = fold_ends[fi]
+                    emb_end = min(fold_ends[fi] + embargo, n_samples)
+                    embargo_mask[emb_start:emb_end] = True
+
+                purge_mask = np.zeros(n_samples, dtype=bool)
+                for fi in test_fold_indices:
+                    pur_start = max(0, fold_starts[fi] - purge)
+                    pur_end = fold_ends[fi]
+                    purge_mask[pur_start:pur_end] = True
+
+                train_mask[embargo_mask] = False
+                train_mask[purge_mask] = False
 
             train_idx = indices[train_mask]
 

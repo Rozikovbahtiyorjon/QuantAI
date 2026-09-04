@@ -144,6 +144,10 @@ class WalkForwardResult:
         default_factory=list
     )
 
+    # P1 FIX Audit #15-17: Sample guard thresholds
+    MIN_TRADES_PER_WINDOW: int = 30
+    MIN_OOS_DAYS_PER_WINDOW: int = 90
+
     @property
     def window_results(
         self,
@@ -159,6 +163,25 @@ class WalkForwardResult:
         Number of completed Walk-Forward windows.
         """
         return len(self.windows)
+
+    @property
+    def valid_windows(self) -> List[WalkForwardWindowResult]:
+        """Only windows with sufficient trades; others are INSUFFICIENT_SAMPLE."""
+        return [w for w in self.windows if w.backtest_result.total_trades >= self.MIN_TRADES_PER_WINDOW]
+
+    @property
+    def insufficient_windows(self) -> List[int]:
+        return [w.window_id for w in self.windows if w.backtest_result.total_trades < self.MIN_TRADES_PER_WINDOW]
+
+    def median_pf_valid(self) -> float | str:
+        """Median PF over valid windows only; INSUFFICIENT_SAMPLE if <50% valid."""
+        valid = self.valid_windows
+        if len(valid) < len(self.windows) / 2:
+            return "INSUFFICIENT_SAMPLE"
+        import numpy as np
+
+        pfs = [w.backtest_result.profit_factor for w in valid if w.backtest_result.profit_factor != float("inf")]
+        return float(np.median(pfs)) if pfs else 0.0
 
 
 # =========================================================
@@ -203,6 +226,7 @@ class WalkForwardEngine:
         train_callback: Optional[
             TrainCallback
         ] = None,
+        timeframe: str = "1h",
     ) -> None:
 
         # -------------------------------------------------
@@ -287,6 +311,12 @@ class WalkForwardEngine:
         )
 
         self.train_callback = train_callback
+        self.timeframe = timeframe
+
+        # Timeframe-aware bars per day
+        _tf_hours = {"15m": 0.25, "1h": 1.0, "4h": 4.0, "1d": 24.0}
+        self._hours_per_bar = _tf_hours.get(timeframe, 1.0)
+        self._bars_per_day = 24.0 / self._hours_per_bar if self._hours_per_bar else 24.0
 
         # -------------------------------------------------
         # LAST RESULT
@@ -530,6 +560,8 @@ class WalkForwardEngine:
         test_start: int,
         test_end: int,
         initial_balance: float,
+        signal_generator: Any = None,
+        strategy_factory: Any = None,
     ) -> WalkForwardWindowResult:
         """
         Run one Walk-Forward test window.
@@ -678,7 +710,7 @@ class WalkForwardEngine:
             )
 
         # -------------------------------------------------
-        # BACKTEST
+        # BACKTEST — immutable per-window strategy (hard-forbid mutable carry-over)
         # -------------------------------------------------
 
         backtest = BacktestEngine(
@@ -693,9 +725,38 @@ class WalkForwardEngine:
 
             test_df = add_indicators(test_df)
 
-        backtest_result = backtest.run(
-            test_df
-        )
+        # Isolated per-window signal generation: fresh instance, no mutable carry-over
+        _orig_generate = None
+        _patched = False
+        # Determine per-window generator to patch
+        _gen = signal_generator if signal_generator is not None else strategy_factory
+        if _gen is not None:
+            try:
+                import src.trade_engine as _te_mod  # type: ignore
+
+                _orig_generate = getattr(_te_mod, "generate_signal_result", None)
+                # Support both callable and object with .generate
+                if hasattr(_gen, "generate") and callable(getattr(_gen, "generate")):
+                    _gen_fn = lambda df_hist, _g=_gen: _g.generate(df_hist)  # type: ignore
+                elif callable(_gen):
+                    _gen_fn = _gen  # type: ignore
+                else:
+                    _gen_fn = None
+                if _gen_fn is not None:
+                    _te_mod.generate_signal_result = _gen_fn  # type: ignore
+                    _patched = True
+            except Exception:
+                _patched = False
+        try:
+            backtest_result = backtest.run(test_df)
+        finally:
+            if _patched and _orig_generate is not None:
+                try:
+                    import src.trade_engine as _te_mod2  # type: ignore
+
+                    _te_mod2.generate_signal_result = _orig_generate  # type: ignore
+                except Exception:
+                    pass
 
         # -------------------------------------------------
         # RESULT
@@ -890,6 +951,48 @@ class WalkForwardEngine:
     # =====================================================
     # RESULT PROPERTY
     # =====================================================
+
+    def oos_duration_days(self, result: Optional[WalkForwardResult] = None, df: pd.DataFrame | None = None) -> float:
+        """
+        Timeframe-aware OOS duration in days — P1.12 strictly via timestamp.
+
+        Primary: OOS_end - OOS_start using real 'timestamp' column (calendar days).
+        Fallback (deprecated): bars / bars_per_day only if timestamp missing — caller should provide df.
+        """
+        r = result or self._result
+        if r is None:
+            return 0.0
+        # P1.12: prefer timestamp calendar duration
+        if df is not None and "timestamp" in df.columns and len(df) > 0 and len(r.windows) > 0:
+            try:
+                # OOS is suffix: total_test_bars at end of df
+                total_test_bars = len(r.windows) * self.test_size
+                oos_start_idx = max(0, len(df) - total_test_bars)
+                oos_start = pd.to_datetime(df["timestamp"].iloc[oos_start_idx])
+                oos_end = pd.to_datetime(df["timestamp"].iloc[-1])
+                return (oos_end - oos_start).total_seconds() / 86400.0
+            except Exception:
+                pass
+            # Also try per-window boundaries via stored indices (more precise)
+            try:
+                first_win = min(r.windows, key=lambda w: w.test_start)
+                last_win = max(r.windows, key=lambda w: w.test_end)
+                # test_start/end are indices into original df
+                oos_start = pd.to_datetime(df["timestamp"].iloc[first_win.test_start])
+                oos_end = pd.to_datetime(df["timestamp"].iloc[last_win.test_end - 1])
+                return (oos_end - oos_start).total_seconds() / 86400.0
+            except Exception:
+                pass
+        # Deprecated fallback: bars / 24 heuristic — only when timestamp unavailable
+        # This path is BLOCKED by P1.12 gate if timestamp missing, but kept for backward compat
+        import warnings
+        warnings.warn("oos_duration_days fallback bars/24 without timestamp — provide df with timestamp for P1.12 compliance", stacklevel=2)
+        total_test_bars = len(r.windows) * self.test_size
+        return total_test_bars / self._bars_per_day
+
+    def oos_duration_for_result(self, result: WalkForwardResult, df: pd.DataFrame | None = None) -> float:
+        """Alias for oos_duration_days with explicit result (P1.12 timestamp-aware)."""
+        return self.oos_duration_days(result, df=df)
 
     @property
     def result(

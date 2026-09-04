@@ -1,0 +1,316 @@
+{
+  "version": "5.2.0",
+  "generated_from": "src/feature_engine.py",
+  "total_features": 25,
+  "active_features": 25,
+  "planned_features": [
+    {
+      "name": "vpin",
+      "dtype": "float",
+      "source": "microstructure.vpin",
+      "availability": "PLANNED",
+      "causal": true,
+      "normalization": "0..1 toxicity",
+      "used_by_model": false,
+      "status": "PLANNED",
+      "reason": "MISSING: skip until live trade-feed wired"
+    },
+    {
+      "name": "kyle_lambda",
+      "dtype": "float",
+      "source": "microstructure.kyle_lambda",
+      "availability": "PLANNED",
+      "causal": true,
+      "normalization": "market impact coeff",
+      "used_by_model": false,
+      "status": "PLANNED",
+      "reason": "MISSING: skip until order-flow feed wired"
+    },
+    {
+      "name": "liquidation_proximity",
+      "dtype": "float",
+      "source": "microstructure.liquidation",
+      "availability": "PLANNED",
+      "causal": true,
+      "normalization": "distance to liquidation cluster",
+      "used_by_model": false,
+      "status": "PLANNED",
+      "reason": "MISSING: skip until liquidation feed wired"
+    },
+    {
+      "name": "lunar_galaxy_score",
+      "dtype": "float",
+      "source": "alternative.lunarcrush",
+      "availability": "PLANNED",
+      "causal": true,
+      "normalization": "0..100",
+      "used_by_model": false,
+      "status": "PLANNED",
+      "reason": "MISSING: requires LunarCrush API"
+    },
+    {
+      "name": "funding_rate",
+      "dtype": "float",
+      "source": "alternative.funding",
+      "availability": "PLANNED",
+      "causal": true,
+      "normalization": "cross-exchange funding",
+      "used_by_model": false,
+      "status": "PLANNED",
+      "reason": "MISSING: requires funding feed"
+    }
+  ],
+  "features": [
+    {
+      "name": "ema_fast_distance",
+      "dtype": "float",
+      "source": "indicators.ema_fast",
+      "availability": "ACTIVE",
+      "causal": true,
+      "normalization": "(close - ema_fast)/ema_fast",
+      "used_by_model": true,
+      "status": "ACTIVE"
+    },
+    {
+      "name": "ema_slow_distance",
+      "dtype": "float",
+      "source": "indicators.ema_slow",
+      "availability": "ACTIVE",
+      "causal": true,
+      "normalization": "(close - ema_slow)/ema_slow",
+      "used_by_model": true,
+      "status": "ACTIVE"
+    },
+    {
+      "name": "ema_trend_distance",
+      "dtype": "float",
+      "source": "indicators.ema_trend",
+      "availability": "ACTIVE",
+      "causal": true,
+      "normalization": "(close - ema_trend)/ema_trend",
+      "used_by_model": true,
+      "status": "ACTIVE"
+    },
+    {
+      "name": "ema_fast_slow_spread",
+      "dtype": "float",
+      "source": "indicators.ema_fast, ema_slow",
+      "availability": "ACTIVE",
+      "causal": true,
+      "normalization": "(ema_fast - ema_slow)/ema_slow",
+      "used_by_model": true,
+      "status": "ACTIVE"
+    },
+    {
+      "name": "ema_slow_trend_spread",
+      "dtype": "float",
+      "source": "indicators.ema_slow, ema_trend",
+      "availability": "ACTIVE",
+      "causal": true,
+      "normalization": "(ema_slow - ema_trend)/ema_trend",
+      "used_by_model": true,
+      "status": "ACTIVE"
+    },
+    {
+      "name": "atr_percent",
+      "dtype": "float",
+      "source": "indicators.atr",
+      "availability": "ACTIVE",
+      "causal": true,
+      "normalization": "atr/close",
+      "used_by_model": true,
+      "status": "ACTIVE"
+    },
+    {
+      "name": "relative_volume",
+      "dtype": "float",
+      "source": "indicators.volume_sma",
+      "availability": "ACTIVE",
+      "causal": true,
+      "normalization": "volume / volume_sma",
+      "used_by_model": true,
+      "status": "ACTIVE"
+    },
+    {
+      "name": "rsi_normalized",
+      "dtype": "float",
+      "source": "indicators.rsi",
+      "availability": "ACTIVE",
+      "causal": true,
+      "normalization": "rsi/100",
+      "used_by_model": true,
+      "status": "ACTIVE"
+    },
+    {
+      "name": "rsi_distance_50",
+      "dtype": "float",
+      "source": "indicators.rsi",
+      "availability": "ACTIVE",
+      "causal": true,
+      "normalization": "(rsi-50)/50",
+      "used_by_model": true,
+      "status": "ACTIVE"
+    },
+    {
+      "name": "rsi_overbought",
+      "dtype": "float",
+      "source": "indicators.rsi",
+      "availability": "ACTIVE",
+      "causal": true,
+      "normalization": "1 if rsi>70 else 0",
+      "used_by_model": true,
+      "status": "ACTIVE"
+    },
+    {
+      "name": "rsi_oversold",
+      "dtype": "float",
+      "source": "indicators.rsi",
+      "availability": "ACTIVE",
+      "causal": true,
+      "normalization": "1 if rsi<30 else 0",
+      "used_by_model": true,
+      "status": "ACTIVE"
+    },
+    {
+      "name": "trend_score",
+      "dtype": "float",
+      "source": "indicators.trend_score",
+      "availability": "ACTIVE",
+      "causal": true,
+      "normalization": "trend_score/6 (-1..1)",
+      "used_by_model": true,
+      "status": "ACTIVE"
+    },
+    {
+      "name": "adx_norm",
+      "dtype": "float",
+      "source": "indicators.adx",
+      "availability": "ACTIVE",
+      "causal": true,
+      "normalization": "adx/100",
+      "used_by_model": true,
+      "status": "ACTIVE"
+    },
+    {
+      "name": "adx_strong",
+      "dtype": "float",
+      "source": "indicators.adx",
+      "availability": "ACTIVE",
+      "causal": true,
+      "normalization": "1 if adx>25 else 0",
+      "used_by_model": true,
+      "status": "ACTIVE"
+    },
+    {
+      "name": "di_diff",
+      "dtype": "float",
+      "source": "indicators.plus_di, minus_di",
+      "availability": "ACTIVE",
+      "causal": true,
+      "normalization": "(plus_di - minus_di)/100",
+      "used_by_model": true,
+      "status": "ACTIVE"
+    },
+    {
+      "name": "macd_norm",
+      "dtype": "float",
+      "source": "indicators.macd",
+      "availability": "ACTIVE",
+      "causal": true,
+      "normalization": "macd/(close*0.01)",
+      "used_by_model": true,
+      "status": "ACTIVE"
+    },
+    {
+      "name": "macd_hist_norm",
+      "dtype": "float",
+      "source": "indicators.macd_hist",
+      "availability": "ACTIVE",
+      "causal": true,
+      "normalization": "macd_hist/(close*0.01)",
+      "used_by_model": true,
+      "status": "ACTIVE"
+    },
+    {
+      "name": "macd_above_signal",
+      "dtype": "float",
+      "source": "indicators.macd, macd_signal",
+      "availability": "ACTIVE",
+      "causal": true,
+      "normalization": "1 if macd>signal else 0",
+      "used_by_model": true,
+      "status": "ACTIVE"
+    },
+    {
+      "name": "bb_width",
+      "dtype": "float",
+      "source": "indicators.bb_upper, bb_lower",
+      "availability": "ACTIVE",
+      "causal": true,
+      "normalization": "(upper-lower)/middle",
+      "used_by_model": true,
+      "status": "ACTIVE"
+    },
+    {
+      "name": "bb_position",
+      "dtype": "float",
+      "source": "indicators.bb_upper, bb_lower",
+      "availability": "ACTIVE",
+      "causal": true,
+      "normalization": "(close-lower)/(upper-lower)-0.5 (-0.5..0.5)",
+      "used_by_model": true,
+      "status": "ACTIVE"
+    },
+    {
+      "name": "bb_squeeze",
+      "dtype": "float",
+      "source": "indicators.bb_width",
+      "availability": "ACTIVE",
+      "causal": true,
+      "normalization": "1 if width<0.02 else 0",
+      "used_by_model": true,
+      "status": "ACTIVE"
+    },
+    {
+      "name": "supertrend_dir",
+      "dtype": "float",
+      "source": "indicators.trend",
+      "availability": "ACTIVE",
+      "causal": true,
+      "normalization": "-1 / 1",
+      "used_by_model": true,
+      "status": "ACTIVE"
+    },
+    {
+      "name": "supertrend_dist",
+      "dtype": "float",
+      "source": "indicators.supertrend",
+      "availability": "ACTIVE",
+      "causal": true,
+      "normalization": "(close - supertrend)/close",
+      "used_by_model": true,
+      "status": "ACTIVE"
+    },
+    {
+      "name": "volume_anomaly",
+      "dtype": "float",
+      "source": "indicators.volume_filter",
+      "availability": "ACTIVE",
+      "causal": true,
+      "normalization": "1 if volume_filter else 0",
+      "used_by_model": true,
+      "status": "ACTIVE"
+    },
+    {
+      "name": "volatility_high",
+      "dtype": "float",
+      "source": "indicators.volatility_filter",
+      "availability": "ACTIVE",
+      "causal": true,
+      "normalization": "1 if volatility_filter else 0",
+      "used_by_model": true,
+      "status": "ACTIVE"
+    }
+  ],
+  "notes": "Generated from src/feature_engine.py — microstructure/alternative features are PLANNED (skip, not 0.0)."
+}

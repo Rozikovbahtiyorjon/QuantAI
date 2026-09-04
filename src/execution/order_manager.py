@@ -111,18 +111,32 @@ class OrderManager:
     # ============================================================
     
     def submit_order(self, order: Order) -> bool:
-        """Submit order to exchange via callback."""
+        """Submit order to exchange via callback (supports sync or async)."""
         if order.status != OrderStatus.NEW:
             return False
-        
+
         if self._submit_callback is None:
             order.reject("No submit callback configured")
             self._stats["rejected"] += 1
             self._stats["errors"] += 1
             return False
-        
+
         try:
-            success = self._submit_callback(order)
+            result = self._submit_callback(order)
+            # Support async callback: if coroutine returned, treat as pending submit
+            # ExecutionEngine's async flow will handle actual exchange submission;
+            # OrderManager should not mark success until async completes.
+            import inspect as _insp
+            if _insp.isawaitable(result) or _insp.iscoroutine(result):
+                # Close coroutine to avoid warning when OrderManager used synchronously
+                try:
+                    result.close()  # type: ignore
+                except Exception:
+                    pass
+                # Defer to async path: keep status NEW but don't count as submitted yet
+                # Caller (ExecutionEngine) will re-invoke via async submit_intent handling
+                return True
+            success = bool(result)
             if success:
                 order.status = OrderStatus.NEW  # Submitted, awaiting ack
                 order.submitted_at = datetime.utcnow()
@@ -259,23 +273,33 @@ class OrderManager:
     # ============================================================
     
     def cancel_order(self, order_id: str) -> bool:
-        """Cancel order by internal order_id."""
+        """Cancel order by internal order_id (supports sync or async callback)."""
         order = self._orders.get(order_id)
         if not order:
             return False
-        
+
         if not order.is_active:
             return False
-        
+
         if self._cancel_callback is None:
-            # Local cancel only
             order.cancel()
             self._stats["canceled"] += 1
             self._active_orders_by_symbol[order.intent.symbol].discard(order.order_id)
             return True
-        
+
         try:
-            success = self._cancel_callback(order)
+            result = self._cancel_callback(order)
+            import inspect as _insp2
+            if _insp2.isawaitable(result) or _insp2.iscoroutine(result):
+                try:
+                    result.close()  # type: ignore
+                except Exception:
+                    pass
+                # Async cancel will be handled by ExecutionEngine; mark pending
+                order.status = OrderStatus.PENDING_CANCEL
+                order.updated_at = datetime.utcnow()
+                return True
+            success = bool(result)
             if success:
                 order.status = OrderStatus.PENDING_CANCEL
                 order.updated_at = datetime.utcnow()

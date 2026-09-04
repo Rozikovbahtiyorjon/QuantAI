@@ -254,3 +254,49 @@ class ChampionEvaluator:
             candidate,
             champion,
         ).qualified
+
+    # Audit §21: Multiple-testing — HEURISTIC PROXY, NOT real DSR/PBO gate
+    def deflated_sharpe_proxy(self, sharpe: float, n_trials: int, var_sharpe: float = 0.1) -> float:
+        """
+        HEURISTIC PROXY — NOT real Deflated Sharpe Ratio.
+
+        Real DSR (Bailey & Prado 2014) needs variance, skew, kurtosis and multiple-testing
+        correction. This Sharpe/sqrt(1+log N) is for ranking only. DO NOT use as production gate.
+        Real gate: src/validation/bootstrap.py block_bootstrap_sharpe.
+        """
+        import math
+
+        if n_trials <= 1:
+            return float(sharpe)
+        return float(sharpe) / math.sqrt(1 + math.log(n_trials))
+
+    def deflated_sharpe(self, sharpe: float, n_trials: int, var_sharpe: float = 0.1) -> float:
+        """Deprecated alias — use deflated_sharpe_proxy (heuristic)."""
+        return self.deflated_sharpe_proxy(sharpe, n_trials, var_sharpe)
+
+    def pbo_placeholder(self, n_trials: int) -> float:
+        """
+        PLACEHOLDER — NOT real PBO. Real PBO needs CSCV combinational splits.
+        Must not be used as serious statistical gate.
+        """
+        import math
+
+        return min(0.99, 0.5 + math.log(max(1, n_trials)) * 0.02)
+
+    def bootstrap_sharpe_ci(self, returns: list[float], n_bootstrap: int = 1000, ci: float = 0.95) -> dict:
+        """Bootstrap Sharpe CI — resample returns with replacement."""
+        import numpy as np
+
+        if len(returns) < 10:
+            return {"mean": 0.0, "lower": 0.0, "upper": 0.0, "p_value": 1.0}
+        rng = np.random.default_rng(42)
+        sharpes = []
+        for _ in range(n_bootstrap):
+            sample = rng.choice(returns, size=len(returns), replace=True)
+            m = float(np.mean(sample))
+            s = float(np.std(sample, ddof=1))
+            sharpes.append(m / s * np.sqrt(252 * 96) if s > 0 else 0.0)  # 4h → 6*365 bars/year
+        lower = float(np.percentile(sharpes, (1 - ci) * 100 / 2))
+        upper = float(np.percentile(sharpes, 100 - (1 - ci) * 100 / 2))
+        p_val = float(np.mean(np.array(sharpes) <= 0))
+        return {"mean": float(np.mean(sharpes)), "lower": lower, "upper": upper, "p_value": p_val}

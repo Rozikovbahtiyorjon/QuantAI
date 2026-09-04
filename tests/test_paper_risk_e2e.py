@@ -26,8 +26,8 @@ from src.strategy.signal_generator import SignalResult
 def make_signal(
     signal: str = "BUY",
     entry: float = 100.0,
-    stop_loss: float = 98.0,
-    take_profit: float | None = 106.0,
+    stop_loss: float = 80.0,  # 20% stop distance to fit 5% exposure with 1% risk
+    take_profit: float | None = 140.0,  # 40% target for 7:1 R:R
 ) -> SignalResult:
     return SignalResult(
         signal=signal,
@@ -162,7 +162,7 @@ class TestSizingAndDuplicates:
     def test_sizing_respects_risk_percent_and_position_cap(self) -> None:
         """
         qty <= min( risk_amount/stop_distance , position_cap_notional/entry )
-        risk 1% of 1000 = $10; stop distance $2 -> risk qty 5;
+        risk 1% of 1000 = $10; stop distance $20 -> risk qty 0.5;
         position cap 5% -> $50 -> 0.5 @ entry 100.
         """
         runner = PaperTradingRunner(
@@ -174,7 +174,7 @@ class TestSizingAndDuplicates:
             max_position_exposure_percent=5.0,
         )
 
-        res = runner.process_signal(make_signal("BUY", entry=100.0, stop_loss=98.0))
+        res = runner.process_signal(make_signal("BUY", entry=100.0, stop_loss=80.0, take_profit=140.0))
 
         assert res.risk_approved is True
         qty = runner.engine.position.quantity
@@ -219,7 +219,7 @@ class TestRiskContextContract:
             default_risk_percent=1.0,
         )
 
-        sig = make_signal("SELL", entry=100.0, stop_loss=102.0)
+        sig = make_signal("SELL", entry=100.0, stop_loss=120.0, take_profit=60.0)
 
         # Without context: current exposure counts -> blocked.
         d_old = orch.evaluate(signal=sig, equity=1000.0, current_exposure=50.0)

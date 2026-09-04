@@ -18,6 +18,8 @@ class StrategyEvaluation:
     robustness_score: float
     monte_carlo_score: float
     stress_score: float
+    # Audit: NOT_EVALUATED/0.0 for unevaluated checks; NOT_ELIGIBLE if critical checks missing
+    not_eligible: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.strategy_id, str):
@@ -175,7 +177,15 @@ class StrategyTournament:
                 evaluation=evaluation,
             )
             for evaluation in evaluations
+            if not getattr(evaluation, "not_eligible", False)  # Exclude NOT_ELIGIBLE
         ]
+
+        if not scored:
+            # No eligible candidates - return empty ranking
+            return TournamentRanking(
+                results=tuple(),
+                champion_strategy_id=None,
+            )
 
         scored.sort(
             key=lambda result: (
@@ -248,6 +258,10 @@ class StrategyTournament:
                 "candidate and champion must be different."
             )
 
+        # NOT_ELIGIBLE candidates cannot beat champion
+        if getattr(candidate, "not_eligible", False):
+            return False
+
         candidate_score = self.evaluate(candidate)
         champion_score = self.evaluate(champion)
 
@@ -266,12 +280,23 @@ class StrategyTournament:
                 "registry must be a StrategyRegistry."
             )
 
-        ranking = self.rank(evaluations)
+        # Filter out NOT_ELIGIBLE strategies before ranking
+        eligible_evals = [e for e in evaluations if not getattr(e, "not_eligible", False)]
+
+        if not eligible_evals:
+            raise RuntimeError("No eligible candidates for promotion — all NOT_ELIGIBLE")
+
+        ranking = self.rank(eligible_evals)
         champion = ranking.champion
 
         if champion is None:
             raise RuntimeError(
                 "tournament produced no champion."
+            )
+
+        if getattr(champion, "not_eligible", False):
+            raise RuntimeError(
+                "Champion is NOT_ELIGIBLE — cannot promote"
             )
 
         record = registry.get(

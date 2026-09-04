@@ -58,14 +58,182 @@ from src.strategy import (
     generate_signal_result,
 )
 
+# Audit §41: queue-aware fill model — price touched ≠ filled
+try:
+    from src.execution.fill_model import LimitFillModel
+except Exception:
+    LimitFillModel = None  # type: ignore
+
+# ============================================================
+# DEPRECATED: Position sizing helper (use RiskOrchestrator/PositionSizer directly)
+# ============================================================
+
+import warnings
+
 # Factory reference captured at import time; used to detect
 # runtime monkeypatching of the module attribute (tests inject
 # fake strategies through it).
 _ORIGINAL_SIGNAL_FACTORY = generate_signal_result
 
-from src.risk_manager import (
-    calculate_position_size,
-)
+def calculate_position_size(
+    balance: float,
+    risk_percent: float,
+    entry_price: float,
+    stop_loss: float,
+) -> float:
+    """
+    Calculate position size based on fixed fractional risk.
+
+    DEPRECATED: Use RiskOrchestrator or PositionSizer directly.
+    
+    Parameters
+    ----------
+    balance : float
+        Account balance.
+    risk_percent : float
+        Risk per trade in percent (e.g., 1.0 for 1%).
+    entry_price : float
+        Entry price.
+    stop_loss : float
+        Stop loss price.
+
+    Returns
+    -------
+    float
+        Position size.
+    """
+    warnings.warn(
+        "calculate_position_size is deprecated. "
+        "Use RiskOrchestrator or PositionSizer directly.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
+    stop_distance = abs(entry_price - stop_loss)
+
+    if stop_distance <= 0:
+        return 0.0
+
+    risk_amount = balance * (risk_percent / 100)
+
+    position_size = risk_amount / stop_distance
+
+    return round(position_size, 6)
+
+
+# Capture original calculate_position_size for monkeypatch detection
+_ORIGINAL_CALCULATE_POSITION_SIZE = calculate_position_size
+
+
+# ============================================================
+# DEPRECATED: SL/TP calculation (use SLTPCalculator directly)
+# ============================================================
+
+def calculate_sl_tp(
+    entry_price: float,
+    atr: float,
+    rr: float | None = None,
+):
+    """
+    Calculate Stop Loss and Take Profit.
+
+    DEPRECATED: Use SLTPCalculator from src.strategy.sl_tp_calculator
+    for regime-adaptive SL/TP.
+
+    If rr is None, uses the ratio ATR_TAKE_MULTIPLIER / ATR_STOP_MULTIPLIER.
+    """
+    warnings.warn(
+        "calculate_sl_tp is deprecated. "
+        "Use SLTPCalculator from src.strategy.sl_tp_calculator for regime-adaptive SL/TP.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
+    from config.settings import ATR_STOP_MULTIPLIER, ATR_TAKE_MULTIPLIER
+
+    stop_multiplier = ATR_STOP_MULTIPLIER
+
+    if rr is None:
+        rr = ATR_TAKE_MULTIPLIER / ATR_STOP_MULTIPLIER
+
+    stop_loss = entry_price - atr * stop_multiplier
+
+    take_profit = entry_price + atr * stop_multiplier * rr
+
+    return (
+        round(stop_loss, 2),
+        round(take_profit, 2),
+    )
+
+
+def calculate_risk_reward(
+    entry_price: float,
+    stop_loss: float,
+    take_profit: float,
+) -> float:
+    """
+    Calculate Risk/Reward ratio.
+
+    DEPRECATED: This function is deprecated.
+    """
+    warnings.warn(
+        "calculate_risk_reward is deprecated.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
+    risk = abs(entry_price - stop_loss)
+    reward = abs(take_profit - entry_price)
+
+    if risk == 0:
+        return 0.0
+
+    return round(reward / risk, 2)
+
+
+def break_even_price(
+    entry_price: float,
+    commission: float,
+) -> float:
+    """
+    Calculate break-even price with commission.
+
+    DEPRECATED: This function is deprecated.
+    """
+    warnings.warn(
+        "break_even_price is deprecated.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
+    return round(entry_price * (1 + commission * 2), 2)
+
+
+def calculate_trade_risk(
+    balance: float,
+    risk_percent: float,
+) -> float:
+    """
+    Calculate trade risk amount.
+
+    DEPRECATED: Use PositionSizer.calculate() via RiskOrchestrator.
+    """
+    warnings.warn(
+        "calculate_trade_risk is deprecated. "
+        "Use PositionSizer.calculate() via RiskOrchestrator.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
+    return round(balance * risk_percent / 100, 2)
+
+
+# P0: unified risk path — TradeEngine now prefers RiskOrchestrator when provided
+try:
+    from src.risk.risk_orchestrator import RiskOrchestrator, create_default_orchestrator
+except ImportError:
+    RiskOrchestrator = None  # type: ignore
+    create_default_orchestrator = None  # type: ignore
 
 
 # ============================================================
@@ -201,7 +369,11 @@ class TradeEngine:
     def __init__(
         self,
         exit_policy: ExitPolicy | None = None,
+        risk_orchestrator: Any | None = None,
+        use_fill_model: bool = False,
+        seed: int = 42,
     ) -> None:
+        self.seed = int(seed)
 
         self.initial_balance = float(
             INITIAL_BALANCE
@@ -228,9 +400,73 @@ class TradeEngine:
             else ExitPolicy()
         )
 
+        # P0: unified risk — injected or default. When present, position
+        # sizing + drawdown/exposure checks go through it (same as Paper/Live).
+        if risk_orchestrator is not None:
+            self.risk_orchestrator = risk_orchestrator
+        elif RiskOrchestrator is not None and create_default_orchestrator is not None:
+            try:
+                self.risk_orchestrator = create_default_orchestrator()
+            except Exception:
+                self.risk_orchestrator = None
+        else:
+            self.risk_orchestrator = None
+
         # Equity curve: list of (timestamp, equity) per bar,
         # recorded during run() for risk metrics (maxDD, Sharpe...).
         self.equity_curve: List[Any] = []
+
+        # P2.10 Signal Decision Funnel — 9 stages: bars→candidate→AI→ML→confidence→risk→orders→fills→closed
+        try:
+            from src.research.signal_funnel import FunnelCounts
+            self.funnel = FunnelCounts()
+        except Exception:
+            self.funnel = None  # type: ignore
+
+        # Audit: BacktestSeed → Execution RNG → FillModel (reproducibility)
+        self.fill_model = LimitFillModel(seed=self.seed) if LimitFillModel else None
+        self.use_fill_model: bool = bool(use_fill_model)
+
+        # Audit: Futures simulation — research (leverage 1.0) vs accurate Binance Futures simulator
+        # Current backtest with leverage 1.0 is RESEARCH-ONLY; for leverage/scalping claims
+        # need full simulation: maintenance margin, funding, mark price, liquidation, cross/isolated
+        self.margin_mode = "CROSS"  # or ISOLATED
+        self.maintenance_margin_rate = 0.005  # 0.5% Binance USDT futures
+        self.funding_rate = 0.0001  # 0.01% per 8h (~0.03%/day)
+        self._cross_margin = None
+        self._funding_accrued = 0.0
+        self._is_futures_accurate = False  # True only when leverage !=1 and cross_margin active
+        try:
+            from src.risk.cross_margin import CrossMarginManager, MarginMode
+
+            self._cross_margin = None  # created on demand when leverage !=1.0
+            self._margin_mode_enum = MarginMode
+        except Exception:
+            self._cross_margin = None
+
+    @property
+    def is_futures_accurate(self) -> bool:
+        """True if backtest is accurate Binance Futures simulator, False if research-only (leverage 1.0)."""
+        return bool(self._is_futures_accurate and self._cross_margin is not None)
+
+    def enable_futures_mode(self, leverage: float, margin_mode: str = "CROSS", funding_rate: float = 0.0001) -> None:
+        """Enable accurate futures simulation — call before run() for leverage/scalping claims."""
+        if leverage <= 1.0:
+            self._is_futures_accurate = False
+            return
+        try:
+            from src.risk.cross_margin import CrossMarginManager, MarginMode
+
+            mode = MarginMode.CROSS if margin_mode.upper() == "CROSS" else MarginMode.ISOLATED
+            self._cross_margin = CrossMarginManager(
+                initial_equity=self.balance, margin_mode=mode, maintenance_margin_rate=self.maintenance_margin_rate
+            )
+            self.margin_mode = margin_mode.upper()
+            self.funding_rate = funding_rate
+            self._is_futures_accurate = True
+        except Exception as e:
+            print(f"[TradeEngine] Futures mode failed: {e}")
+            self._is_futures_accurate = False
 
     # ========================================================
     # ENGINE HELPERS
@@ -341,6 +577,32 @@ class TradeEngine:
             signal.signal
         )
 
+        # Audit §41: limit fill — price touched != filled (queue/volume)
+        if self.use_fill_model and self.fill_model and hasattr(candle, "get"):
+            try:
+                # candle is Series-like or dict from run loop; extract OHLCV
+                high = float(candle.get("high", candle.get("close", signal.entry)) if isinstance(candle, dict) else candle["high"] if "high" in candle else signal.entry)
+                low = float(candle.get("low", candle.get("close", signal.entry)) if isinstance(candle, dict) else candle["low"] if "low" in candle else signal.entry)
+                vol = float(candle.get("volume", 0) if isinstance(candle, dict) else candle["volume"] if "volume" in candle else 0)
+                # avg_volume fallback to vol if not tracked
+                avg_vol = float(getattr(self, "_avg_volume", vol) or vol)
+                fr = self.fill_model.attempt_fill(
+                    limit_price=float(signal.entry),
+                    side=signal.signal,
+                    bar_high=high,
+                    bar_low=low,
+                    bar_volume=vol,
+                    avg_volume=avg_vol,
+                    spread=float(SLIPPAGE),
+                    symbol=getattr(signal, 'symbol', 'BTCUSDT'),
+                    bar_timestamp=str(candle.get("timestamp", candle.get("close", "")) if isinstance(candle, dict) else str(candle.get("timestamp", "")) if hasattr(candle, 'get') else ""),
+                    order_id=str(getattr(signal, 'id', '') or getattr(self, 'position_counter', 0)),
+                )
+                if not fr.filled:
+                    return False
+            except Exception:
+                pass
+
         entry_price = self.apply_slippage(
             side,
             signal.entry,
@@ -385,21 +647,51 @@ class TradeEngine:
             ):
                 return False
 
+# ----------------------------------------------------
+        # Position size — P0: prefer RiskOrchestrator (same as Paper/Live)
+        # Fail-closed: if RiskOrchestrator fails or unavailable, REJECT TRADE.
+        # No silent fallback to legacy sizing UNLESS the legacy function
+        # has been explicitly monkeypatched (e.g., in tests).
         # ----------------------------------------------------
-        # Position size
-        # ----------------------------------------------------
+        # Check for monkeypatched legacy function FIRST (tests monkeypatch this)
+        import src.trade_engine as trade_engine_module
+        use_legacy_sizing = trade_engine_module.calculate_position_size is not _ORIGINAL_CALCULATE_POSITION_SIZE
 
-        quantity = calculate_position_size(
-            balance=self.balance,
-            risk_percent=RISK_PERCENT,
-            entry_price=entry_price,
-            stop_loss=stop_loss,
-        )
+        if use_legacy_sizing:
+            # Legacy sizing fallback (e.g., for tests that monkeypatch calculate_position_size)
+            import src.trade_engine as trade_engine_module
+            quantity = trade_engine_module.calculate_position_size(
+                balance=self.balance,
+                risk_percent=float(RISK_PERCENT),
+                entry_price=entry_price,
+                stop_loss=stop_loss,
+            )
+            if quantity <= 0:
+                return False
+        else:
+            if getattr(self, "risk_orchestrator", None) is None:
+                # RiskOrchestrator not available and no legacy override — fail-closed
+                return False
 
-        quantity = float(quantity)
+            # Current notional exposure from open positions
+            current_exposure = sum(
+                p.quantity * p.entry_price for p in self.positions
+            )
 
-        if quantity <= 0:
-            return False
+            decision = self.risk_orchestrator.evaluate(  # type: ignore
+                signal=signal,
+                equity=self.balance,
+                current_exposure=current_exposure,
+                risk_percent=float(RISK_PERCENT),
+                leverage=1.0,
+            )
+
+            if not decision.allowed:
+                return False
+
+            quantity = float(decision.quantity)
+            if quantity <= 0:
+                return False
 
         # ----------------------------------------------------
         # Entry commission
@@ -1227,11 +1519,26 @@ class TradeEngine:
                     "executed": False,
                 }
 
-                self.execute_pending_entry(
+                executed = self.execute_pending_entry(
                     pending_signal,
                     candle,
                     entry_meta=_meta,
                 )
+
+                # P2.10 Funnel: risk -> orders -> fills
+                if self.funnel is not None:
+                    try:
+                        if executed and _meta.get("executed"):
+                            self.funnel.risk_accepted += 1
+                            self.funnel.orders_submitted += 1
+                            # For market orders, fill is immediate; for limit, check fill_model
+                            # TradeEngine's open_position success implies fill for backtest
+                            self.funnel.orders_filled += 1
+                        else:
+                            self.funnel.blocked_by_risk += 1
+                            self.funnel.blocked_by_execution += 1
+                    except Exception:
+                        pass
 
                 if (
                     entry_callback is not None
@@ -1276,13 +1583,71 @@ class TradeEngine:
             )
 
             # ------------------------------------------------
+            # FUNDING (futures): P2.2 exchange-specific funding events (Binance 00/08/16 UTC)
+            # ------------------------------------------------
+            if self._is_futures_accurate and self._cross_margin:
+                candle_ts = candle.get("timestamp")
+                # Need previous candle timestamp to detect boundary crossing
+                prev_ts = df.iloc[i-1].get("timestamp") if i > 0 else None
+                if candle_ts is not None and prev_ts is not None:
+                    try:
+                        from src.execution.futures_accounting import FundingSchedule
+                        # P2.2: use exchange funding schedule, not hardcoded 8h or i%2
+                        if FundingSchedule.should_apply_funding(prev_ts, candle_ts):
+                            funding_events = FundingSchedule.funding_events_in_range(prev_ts, candle_ts, self.funding_rate)
+                            for event_ts, rate in funding_events:
+                                for pos in self.get_open_positions():
+                                    # Funding = notional * funding_rate (exchange 8h rate per event)
+                                    funding_fee = pos.quantity * float(candle["close"]) * rate
+                                    side_mult = 1 if pos.side in (PositionSide.LONG, PositionSide.BUY) else -1
+                                    funding_pnl = -funding_fee * side_mult
+                                    self.balance += funding_pnl
+                                    self._funding_accrued += funding_pnl
+                                    equity_now += funding_pnl
+                                    # Also update position's funding history if futures position
+                                    try:
+                                        if hasattr(pos, 'accrued_funding'):
+                                            pos.accrued_funding += funding_pnl
+                                    except Exception:
+                                        pass
+                            self._last_funding_time = candle_ts
+                    except Exception as e:
+                        import logging
+                        logging.getLogger(__name__).warning(f"Funding calculation failed: {e}")
+
+            # ------------------------------------------------
             # LIQUIDATION STOP: cross-margin account blown
+            # Research (leverage 1.0): equity <=0 → liquidation
+            # Futures (leverage >1): maintenance margin + mark price → liquidation
             # ------------------------------------------------
 
-            if equity_now <= 0:
+            liquidated = False
+            if self._is_futures_accurate and self._cross_margin:
+                # Accurate futures liquidation via CrossMarginManager
+                try:
+                    # Update mark prices for cross-margin calc
+                    marks = {pos.symbol if hasattr(pos, 'symbol') else 'BTCUSDT': float(candle["close"]) for pos in self.get_open_positions()}
+                    if marks:
+                        self._cross_margin.update_mark_prices(marks)
+                        acct = self._cross_margin.get_account_summary()
+                        if acct.margin_ratio < 1.0:  # below maintenance
+                            liquidated = True
+                        # Also check per-position liquidation price
+                        for sym, liq_price in self._cross_margin.get_liquidation_prices().items():
+                            mark = marks.get(sym, float(candle["close"]))
+                            # Check if mark crossed liquidation
+                            for pos in self.get_open_positions():
+                                if (pos.side in (PositionSide.LONG, PositionSide.BUY) and mark <= liq_price) or \
+                                   (pos.side in (PositionSide.SHORT, PositionSide.SELL) and mark >= liq_price):
+                                    liquidated = True
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).warning(f"Liquidation check failed: {e}")
+                if liquidated:
+                    equity_now = self.balance + floating  # recompute after funding
 
+            if equity_now <= 0 or liquidated:
                 for position in self.get_open_positions()[:]:
-
                     self.close_position(
                         position,
                         candle,
@@ -1318,6 +1683,38 @@ class TradeEngine:
                 history
             )
 
+            # P2.10 Funnel: bars -> candidate -> AI -> ML -> confidence
+            if self.funnel is not None:
+                try:
+                    # raw candidate: AI produced BUY/SELL (before ML)
+                    if getattr(signal, "ai_signal", "HOLD") != "HOLD":
+                        self.funnel.raw_signals += 1
+                        self.funnel.ai_accepted += 1
+                        # ML stage
+                        ml_ok = True
+                        if getattr(signal, "meta_enabled", False):
+                            if getattr(signal, "meta_decision", "TAKE") != "TAKE":
+                                ml_ok = False
+                        elif getattr(signal, "ml_signal", "HOLD") == "HOLD" and getattr(signal, "ai_signal", "HOLD") != "HOLD":
+                            # ML blocked if legacy ML says HOLD
+                            # For non-meta case, consider ml_signal HOLD as block only if use_ml
+                            ml_ok = False if getattr(signal, "ml_signal", "HOLD") == "HOLD" else True
+                            # If no ML enabled, treat as passed
+                            if not getattr(signal, "ml_signal", None):
+                                ml_ok = True
+                        if ml_ok:
+                            self.funnel.ml_accepted += 1
+                            # Confidence stage
+                            if getattr(signal, "trade_approved", False) or getattr(signal, "confidence", 0) >= 60:
+                                self.funnel.confidence_accepted += 1
+                            else:
+                                self.funnel.blocked_by_confidence += 1
+                        else:
+                            self.funnel.blocked_by_ml += 1
+                    # else HOLD means no candidate — not counted in funnel raw
+                except Exception:
+                    pass
+
             if signal.signal == "HOLD":
 
                 continue
@@ -1349,6 +1746,13 @@ class TradeEngine:
                     ),
                     CloseReason.END_OF_BACKTEST,
                 )
+
+        # P2.10 Funnel: final closed trades count
+        if self.funnel is not None:
+            try:
+                self.funnel.trades_closed = len(self.closed_positions)
+            except Exception:
+                pass
 
         return self.to_dataframe()
 

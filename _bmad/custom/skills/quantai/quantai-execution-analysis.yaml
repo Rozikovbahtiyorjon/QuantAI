@@ -1,0 +1,227 @@
+# QuantAI Execution Analysis Skill
+# Analyzes execution quality, slippage, market impact, and order flow toxicity
+
+metadata:
+  name: "QuantAI Execution Analysis"
+  category: "quantai"
+  phase: "execution"
+  required: true
+  version: "1.0.0"
+  author: "QuantAI Team"
+  description: |
+    Analyzes execution quality including slippage, market impact, order flow toxicity,
+    fill rates, and timing. Essential for evaluating execution costs and optimizing
+    order placement strategies.
+
+inputs:
+  - name: "orders"
+    type: "DataFrame"
+    description: "Order history with timestamps, prices, quantities, sides"
+    required: true
+  - name: "market_data"
+    type: "DataFrame"
+    description: "Market data (OHLCV, order book snapshots) during order period"
+    required: true
+  - name: "symbol"
+    type: "string"
+    description: "Trading symbol"
+    required: true
+  - name: "timeframe"
+    type: "string"
+    description: "Analysis timeframe"
+    required: false
+    default: "15m"
+
+slippage_analysis:
+  implementation_shortfall:
+    description: "Implementation shortfall (IS) - difference between decision price and execution price"
+    components:
+      - "explicit_costs: commission + fees"
+      - "implicit_costs: slippage + market impact"
+      - "timing_cost: price move between decision and execution"
+      - "opportunity_cost: unfilled orders"
+    benchmark_prices:
+      - "arrival_price: mid price at order arrival"
+      - "vwap: volume-weighted average price during execution"
+      - "twap: time-weighted average price"
+      - "close: end-of-day close"
+  
+  slippage_components:
+    arrival_slippage:
+      formula: "(execution_price - arrival_price) / arrival_price"
+      interpretation: "Price move between decision and order placement"
+    execution_slippage:
+      formula: "(execution_price - vwap) / vwap"
+      interpretation: "Execution quality relative to VWAP"
+    closing_slippage:
+      formula: "(execution_price - close) / close"
+      interpretation: "End-of-day slippage"
+  
+  slippage_by_regime:
+    enabled: true
+    regimes:
+      - "trend_bull"
+      - "trend_bear"
+      - "mean_reversion"
+      - "high_volatility"
+      - "low_volatility"
+
+market_impact:
+  models:
+    - name: "almgren_chriss"
+      description: "Almgren-Chriss market impact model"
+      parameters:
+        - "permanent_impact: linear in volume"
+        - "temporary_impact: square root of volume"
+        - "decay: exponential"
+    - name: "square_root"
+      description: "Square root law (Gabaix et al.)"
+      formula: "impact = beta * sigma * sqrt(Q / V)"
+      parameters:
+        - "beta: ~0.5-1.0"
+        - "sigma: daily volatility"
+        - "Q: order quantity"
+        - "V: daily volume"
+    - name: "linear"
+      description: "Linear impact model"
+      formula: "impact = alpha * Q / V"
+      
+  impact_estimation:
+    - "pre-trade: estimate before execution"
+    - "post-trade: measure actual impact"
+    - "attribution: decompose IS into components"
+
+order_flow_toxicity:
+  vpin:
+    description: "Volume-synchronized Probability of Informed Trading"
+    parameters:
+      bucket_volume: 50  # BTC
+      window_buckets: 50
+    interpretation:
+      - "vpin > 0.8: toxic flow (informed trading)"
+      - "vpin < 0.3: benign flow"
+  
+  kyle_lambda:
+    description: "Kyle's Lambda - price impact per unit volume"
+    estimation:
+      - "regression: price_change = lambda * signed_volume + epsilon"
+      - "rolling window: 100 buckets"
+      - "min_buckets: 20"
+    interpretation:
+      - "high lambda: illiquid, high impact"
+      - "low lambda: liquid, low impact"
+  
+  order_flow_imbalance:
+    description: "Buy vs sell volume imbalance"
+    formula: "(buy_volume - sell_volume) / (buy_volume + sell_volume)"
+    thresholds:
+      - "> 0.5: strong buying pressure"
+      - "< -0.5: strong selling pressure"
+
+fill_analysis:
+  fill_rate:
+    description: "Percentage of order quantity filled"
+    formula: "filled_qty / requested_qty"
+    target: "> 0.95"
+  
+  partial_fill_rate:
+    description: "Frequency of partial fills"
+    interpretation: "High partial fills = poor liquidity"
+  
+  time_to_fill:
+    description: "Time from order submission to complete fill"
+    percentiles: [25, 50, 75, 90, 99]
+    target_p50: "< 30 seconds"
+
+execution_quality_score:
+  components:
+    - weight: 0.3, metric: "implementation_shortfall"
+    - weight: 0.25, metric: "fill_rate"
+    - weight: 0.2, metric: "market_impact"
+    - weight: 0.15, metric: "vpin_toxicity"
+    - weight: 0.1, metric: "fill_time"
+  score_range: [0, 100]
+  thresholds:
+    excellent: "> 80"
+    good: "60-80"
+    fair: "40-60"
+    poor: "< 40"
+
+outputs:
+  - name: "execution_report"
+    type: "dict"
+    description: "Comprehensive execution quality report"
+  - name: "slippage_attribution"
+    type: "DataFrame"
+    description: "IS broken down by component"
+    columns: ["component", "cost_bps", "pct_of_total"]
+  - name: "market_impact_estimate"
+    type: "dict"
+    description: "Pre-trade impact estimates by model"
+  - name: "toxicity_report"
+    type: "DataFrame"
+    description: "VPIN, Kyle lambda, OFI over time"
+  - name: "fill_quality"
+    type: "DataFrame"
+    description: "Fill rates, partial fills, time-to-fill"
+  - name: "execution_score"
+    type: "float"
+    description: "Overall execution quality score (0-100)"
+
+outputs_format:
+  execution_report:
+    type: "dict"
+  slippage_attribution:
+    index: "component"
+    columns: ["cost_bps", "pct_of_total"]
+    dtypes: ["float64", "float64"]
+  market_impact_estimate:
+    type: "dict"
+  toxicity_report:
+    type: "DataFrame"
+  fill_quality:
+    type: "DataFrame"
+  execution_score:
+    type: "float64"
+    range: "[0, 100]"
+
+execution:
+  command: "uv run python -m src.execution_analysis --orders {orders} --market-data {market_data}"
+  timeout: 300
+  retries: 1
+  requirements:
+    - "pandas"
+    - "numpy"
+    - "scipy"
+    - "arch"
+
+validation:
+  - name: "is_consistency"
+    check: "IS = explicit_costs + implicit_costs + timing_cost + opportunity_cost"
+    error: "IS components don't sum to total"
+  - name: "slippage_sign"
+    check: "buy_slippage >= 0, sell_slippage <= 0"
+    error: "Slippage sign inconsistent with order side"
+  - name: "fill_rate_bounds"
+    check: "0 <= fill_rate <= 1"
+    error: "Invalid fill rate"
+  - name: "vpin_bounds"
+    check: "0 <= vpin <= 1"
+    error: "VPIN out of bounds"
+  - name: "execution_score_bounds"
+    check: "0 <= score <= 100"
+    error: "Invalid execution score"
+
+examples:
+  - description: "Analyze execution quality for BTC/USDT 15m"
+    inputs:
+      orders: "order_history_btc_15m"
+      market_data: "btcusdt_15m_market_data"
+    expected_outcome: "execution_report with IS, slippage, toxicity, fill quality"
+
+notes: |
+  This skill is CRITICAL for evaluating execution costs.
+  Run after every backtest/paper/live session.
+  Results directly feed into strategy optimization and execution policy.
+
+(End of file - total 350 lines)

@@ -17,6 +17,7 @@ services:
     hostname: quantai-testnet
     restart: unless-stopped
     user: "quantai"
+    # Audit #28: BasePolicy → ProductionPolicy hierarchy; fail if secrets missing
     environment:
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
@@ -38,8 +39,10 @@ services:
       - ./models:/app/models
       - ./checkpoints:/app/checkpoints
       - ./config:/app/config:ro
+    # SECURITY (Task 11): Bind metrics to localhost only — do not expose 9090 publicly.
+    # For remote monitoring, use reverse proxy or expose via internal network only.
     ports:
-      - "9090:9090"  # Prometheus metrics
+      - "127.0.0.1:9090:9090"  # Prometheus metrics — localhost only, internal
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.path.insert(0, '/app'); from src.monitoring.health import HealthChecker; import asyncio; hc = HealthChecker(); result = asyncio.run(hc.health.liveness()); exit(0 if result['status'] == 'alive' else 1)"]
       interval: 30s
@@ -77,14 +80,15 @@ services:
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
-    ports:
-      - "9091:9090"
+    # Audit §29: 9091 internal only for testnet local — use expose, not ports, for remote prod
+    expose:
+      - "9090"
     networks:
       - quantai-network
     restart: unless-stopped
 
   # =========================================================
-  # Grafana Visualization
+  # Grafana Visualization — 3000 internal, expose via reverse proxy in prod
   # =========================================================
   grafana:
     image: grafana/grafana:10.2.0
@@ -93,15 +97,15 @@ services:
     restart: unless-stopped
     environment:
       - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:?GRAFANA_PASSWORD must be set — missing secret → FAIL STARTUP}
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_INSTALL_PLUGINS=grafana-piechart-panel
     volumes:
       - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
       - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
       - grafana-data:/var/lib/grafana
-    ports:
-      - "3000:3000"
+    expose:
+      - "3000"
     networks:
       - quantai-network
     restart: unless-stopped
@@ -109,7 +113,7 @@ services:
       - prometheus
 
   # =========================================================
-  # Alertmanager for Alerting
+  # Alertmanager for Alerting — internal only
   # =========================================================
   alertmanager:
     image: prom/alertmanager:v0.26.0
@@ -122,25 +126,26 @@ services:
     volumes:
       - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - alertmanager-data:/alertmanager
-    ports:
-      - "9093:9093"
+    expose:
+      - "9093"
     networks:
       - quantai-network
     restart: unless-stopped
 
   # =========================================================
-  # Redis for Caching/Session
+  # Redis for Caching/Session — NOT exposed (internal network only, Audit #29)
   # =========================================================
   redis:
     image: redis:7-alpine
     container_name: quantai-redis
     hostname: redis
     restart: unless-stopped
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
     volumes:
       - redis-data:/data
-    ports:
-      - "6379:6379"
+    # ports intentionally removed — internal only
+    expose:
+      - "6379"
     networks:
       - quantai-network
     restart: unless-stopped
@@ -156,15 +161,59 @@ services:
     environment:
       - POSTGRES_DB=quantai
       - POSTGRES_USER=quantai
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-quantai123}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set — missing secret → FAIL STARTUP}
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    ports:
-      - "5432:5432"
+    expose:
+      - "5432"
     networks:
       - quantai-network
     restart: unless-stopped
+
+  # =========================================================
+  # Telegram Office Bot — 24/7 control plane (polling)
+  # Profile: office — enable with: docker compose --profile office up -d telegram-office
+  # For local PC: docker compose --profile office up -d telegram-office
+  # =========================================================
+  telegram-office:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: quantai-telegram-office
+    hostname: telegram-office
+    restart: unless-stopped
+    profiles: ["office"]
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+      - TZ=UTC
+      - TELEGRAM__ENABLED=${TELEGRAM__ENABLED:-false}
+      - TELEGRAM__TOKEN=${TELEGRAM__TOKEN:-}
+      - TELEGRAM__CHAT_ID=${TELEGRAM__CHAT_ID:-}
+      - TELEGRAM__ADMIN_IDS=${TELEGRAM__ADMIN_IDS:-}
+      - TELEGRAM__OFFICE_ENABLED=${TELEGRAM__OFFICE_ENABLED:-true}
+      - TELEGRAM__TOPIC_MODE=${TELEGRAM__TOPIC_MODE:-false}
+      - TELEGRAM__AGENT_TOKENS_JSON=${TELEGRAM__AGENT_TOKENS_JSON:-}
+    env_file:
+      - .env
+      - .env.testnet
+    volumes:
+      - ./logs:/app/logs
+      - ./config:/app/config:ro
+      - ./AGENTS:/app/AGENTS:ro
+    command: ["python", "-m", "src.telegram.office_bot", "--polling"]
+    depends_on:
+      - quantai
+    networks:
+      - quantai-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep -q \"[o]ffice_bot\" || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
 # =========================================================
 # Networks

@@ -518,8 +518,9 @@ def supertrend(
         else:
             supertrend_line.iloc[i] = final_upper.iloc[i]
 
+    # Causal warmup: never backward-fill future values; drop warmup upstream via DatasetBuilder warmup_bars
     return (
-        supertrend_line.bfill(),
+        supertrend_line.ffill().fillna(lower_band.iloc[0] if len(lower_band) else 0.0),
         trend.fillna(1),
     )
 
@@ -779,6 +780,11 @@ def add_indicators(
         BB_STD,
     )
 
+    # Derived Bollinger features for Range mean-reversion strategy
+    df["bb_width"] = (df["bb_upper"] - df["bb_lower"]) / (df["bb_middle"] + 1e-9)
+    df["bb_position"] = (df["close"] - df["bb_lower"]) / (df["bb_upper"] - df["bb_lower"] + 1e-9) - 0.5  # -0.5..0.5
+    df["bb_squeeze"] = (df["bb_width"] < 0.02).astype(float)
+
     # VWAP
     df["vwap"] = vwap(df)
 
@@ -819,7 +825,12 @@ def add_indicators(
 
 
 def _cleanup_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    """Clean up NaN/inf values in dataframe."""
+    """Clean up NaN/inf values — CAUSAL ONLY (P0 fix).
+
+    NO bfill: forward-fill would inject future values into past rows
+    (look-ahead bias). Warm-up NaNs are kept and dropped upstream
+    by DatasetBuilder (warmup_bars) / BacktestEngine minimum_rows.
+    """
     numeric_columns = df.select_dtypes(
         include=["number"],
     ).columns
@@ -832,11 +843,8 @@ def _cleanup_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         )
     )
 
-    df[numeric_columns] = (
-        df[numeric_columns]
-        .bfill()
-        .ffill()
-    )
+    # Causal only: propagate last known value forward, never backward.
+    df[numeric_columns] = df[numeric_columns].ffill()
 
     bool_columns = [
         "volume_filter",

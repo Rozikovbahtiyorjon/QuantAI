@@ -60,49 +60,15 @@ from sklearn.utils.class_weight import compute_sample_weight
 from xgboost import XGBClassifier
 
 from src.model_manager import ModelManager
-from src.ml_ensemble import HeterogeneousEnsemble, EnsembleConfig
+from src.ml_config import MLConfig
 
-
-# ====================================================
-# CONFIG
-# ====================================================
-
-@dataclass
-class MLConfig:
-
-    test_size: float = 0.20
-
-    random_state: int = 42
-
-    n_estimators: int = 300
-
-    max_depth: int = 6
-
-    learning_rate: float = 0.05
-
-    subsample: float = 0.90
-
-    colsample_bytree: float = 0.90
-
-    use_class_weights: bool = True
-
-    # Purged K-Fold parameters
-    cv_type: str = "combinatorial"          # "purged" or "combinatorial"
-    n_splits: int = 5
-    embargo_pct: float = 0.01        # Gap between train/test (1% of samples)
-    purge_pct: float = 0.0           # Remove overlapping labels
-
-    # Regime-aware heads
-    regime_aware: bool = False
-    regime_min_samples: int = 150
-    n_test_folds: int = 2            # For combinatorial CV
-
-    # Ensemble settings
-    use_ensemble: bool = False
-    ensemble_use_lightgbm: bool = True
-    ensemble_use_catboost: bool = True
-    ensemble_regime_weighted: bool = True
-    ensemble_min_samples_per_regime: int = 150
+# Lazy import to avoid circular import (ml_ensemble -> ml_config, not ml_engine)
+# HeterogeneousEnsemble is imported inside methods when needed
+try:
+    from src.ml_ensemble import HeterogeneousEnsemble, EnsembleConfig
+except ImportError:
+    HeterogeneousEnsemble = None  # type: ignore
+    EnsembleConfig = None  # type: ignore
 
 
 # ====================================================
@@ -189,14 +155,14 @@ class MLEngine:
 
                 self.model = loaded
 
+        # Track if using ensemble (must be before _create_model)
+        self._use_ensemble = self.config.use_ensemble
+
         if self.model is None:
 
             self.model = (
                 self._create_model()
             )
-        
-        # Track if using ensemble
-        self._use_ensemble = self.config.use_ensemble
 
     # ====================================================
     # CREATE MODEL
@@ -205,14 +171,18 @@ class MLEngine:
     def _create_model(self):
         """Create model - either XGBoost or HeterogeneousEnsemble based on config."""
         if self._use_ensemble:
-            ensemble_config = EnsembleConfig(
+            # Lazy import to avoid circular
+            from src.ml_ensemble import HeterogeneousEnsemble as _HET
+            from src.ml_ensemble import EnsembleConfig as _EC
+
+            ensemble_config = _EC(
                 enabled=True,
                 use_lightgbm=self.config.ensemble_use_lightgbm,
                 use_catboost=self.config.ensemble_use_catboost,
                 regime_weighted=self.config.ensemble_regime_weighted,
                 min_samples_per_regime=self.config.ensemble_min_samples_per_regime,
             )
-            return HeterogeneousEnsemble(
+            return _HET(
                 base_config=self.config,
                 ensemble_config=ensemble_config,
             )
@@ -344,15 +314,16 @@ class MLEngine:
                 "target",
                 "future_return",
                 "index",
+                "tb_barrier",
+                "tb_t1",
             ],
 
             errors="ignore",
 
         )
 
-        # ------------------------------------------------
-        # Numeric validation
-        # ------------------------------------------------
+        # Drop diagnostics that are non-numeric (tb_barrier) — keep only numeric features
+        X = X.select_dtypes(include=[np.number])
 
         non_numeric = (
             X.select_dtypes(
@@ -818,18 +789,21 @@ class MLEngine:
             probabilities[-1]
         )
 
+        # P0 FIX: return probability in [0,1] — single internal standard.
+        # UI layer formats as percent. Mixing 0..100 with 0..1 (signal_generator)
+        # caused combined_prob ~37 and destroyed WeightedGate.
         return {
 
             "SELL": float(
-                latest[0] * 100
+                latest[0]
             ),
 
             "HOLD": float(
-                latest[1] * 100
+                latest[1]
             ),
 
             "BUY": float(
-                latest[2] * 100
+                latest[2]
             ),
 
         }

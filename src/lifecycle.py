@@ -13,9 +13,11 @@ from __future__ import annotations
 import asyncio
 import signal
 import sys
+import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 from config.settings import Settings, settings
@@ -74,18 +76,22 @@ def get_state() -> AppState:
 async def initialize_logging() -> Any:
     """Initialize structured logging."""
     logger = setup_logging(
-        level=settings.config.logging.log_level,
+        level=settings.logging.log_level,
         json_format=True,
-        log_file=settings.config.logging.trades_file,
+        log_file=settings.logging.trades_file,
     )
-    log_info(logger, "Logging initialized", level=settings.config.logging.log_level)
+    log_info(logger, "Logging initialized")
     return logger
 
 
 async def validate_configuration(logger) -> None:
     """Validate configuration on startup."""
     log_info(logger, "Validating configuration...")
-    validate_config_or_exit(settings, logger)
+    result = validate_config_or_exit(settings)
+    if not result.valid:
+        for err in result.errors:
+            logger.error(err)
+        raise RuntimeError("Configuration validation failed")
     log_info(logger, "Configuration validation passed")
 
 
@@ -93,8 +99,8 @@ async def initialize_paper_engine(logger) -> PaperTradingEngine:
     """Initialize paper trading engine."""
     log_info(logger, "Initializing paper trading engine...")
     engine = PaperTradingEngine(
-        initial_balance=settings.config.account.initial_balance,
-        commission=settings.config.commission.commission,
+        initial_balance=settings.account.initial_balance,
+        commission=settings.commission.commission,
     )
     log_info(logger, "Paper trading engine initialized")
     return engine
@@ -105,21 +111,21 @@ async def initialize_ml_engine(logger) -> tuple[MLEngine, ModelManager]:
     log_info(logger, "Initializing ML engine...")
     
     ml_config = MLConfig(
-        cv_type=settings.config.ml.cv_type,
-        n_splits=settings.config.ml.n_splits,
-        embargo_pct=settings.config.ml.embargo_pct,
-        purge_pct=settings.config.ml.purge_pct,
-        n_test_folds=settings.config.ml.n_test_folds,
-        n_estimators=settings.config.ml.n_estimators,
-        max_depth=settings.config.ml.max_depth,
-        learning_rate=settings.config.ml.learning_rate,
-        subsample=settings.config.ml.subsample,
-        colsample_bytree=settings.config.ml.colsample_bytree,
-        use_class_weights=settings.config.ml.use_class_weights,
+        cv_type=settings.ml.cv_type,
+        n_splits=settings.ml.n_splits,
+        embargo_pct=settings.ml.embargo_pct,
+        purge_pct=settings.ml.purge_pct,
+        n_test_folds=settings.ml.n_test_folds,
+        n_estimators=settings.ml.n_estimators,
+        max_depth=settings.ml.max_depth,
+        learning_rate=settings.ml.learning_rate,
+        subsample=settings.ml.subsample,
+        colsample_bytree=settings.ml.colsample_bytree,
+        use_class_weights=settings.ml.use_class_weights,
     )
     
     model_manager = ModelManager()
-    model_manager.model_path = Path(settings.config.ml.model_path)
+    model_manager.model_path = Path(settings.ml.model_path)
     
     ml_engine = MLEngine(
         config=ml_config,
@@ -136,17 +142,17 @@ async def initialize_ml_engine(logger) -> tuple[MLEngine, ModelManager]:
 
 async def initialize_binance(logger, state: AppState) -> tuple[Optional[BinanceRestAdapter], Optional[BinanceWebSocketAdapter]]:
     """Initialize Binance adapters for DRY_RUN/LIVE modes."""
-    if state.settings.config.mode == "PAPER":
+    if state.settings.exchange.mode == "PAPER":
         log_info(logger, "PAPER mode: skipping Binance initialization")
         return None, None
     
     log_info(logger, "Initializing Binance adapters...")
     
     binance_config = BinanceConfig(
-        api_key=state.settings.config.binance.api_key,
-        api_secret=state.settings.config.binance.api_secret,
-        testnet=state.settings.config.binance.testnet,
-        recv_window=state.settings.config.binance.recv_window,
+        api_key=state.settings.binance.api_key,
+        api_secret=state.settings.binance.api_secret,
+        testnet=state.settings.binance.testnet,
+        recv_window=state.settings.binance.recv_window,
     )
     
     binance_rest = BinanceRestAdapter(binance_config)
@@ -164,7 +170,7 @@ async def initialize_order_manager(logger, binance_rest, binance_ws) -> OrderMan
     log_info(logger, "Initializing order manager...")
     
     om_config = OrderManagerConfig(
-        max_open_orders=settings.config.risk.max_open_positions or 100,
+        max_open_orders=settings.risk.max_open_positions or 100,
         max_order_age_seconds=3600,
         enable_order_expiration=True,
     )
@@ -187,13 +193,17 @@ async def initialize_risk_orchestrator(logger) -> RiskOrchestrator:
     """Initialize risk orchestrator."""
     log_info(logger, "Initializing risk orchestrator...")
     
+    # P0.6 No 50x defaults — use canonical RiskPolicy (Research 10x, Production 3x)
+    from src.risk.policy import get_policy
+    _pol = get_policy("research")  # lifecycle is research, not production
     risk_orchestrator = create_default_orchestrator(
-        max_drawdown_percent=settings.config.risk.drawdown_limit_pct,
-        max_total_exposure_percent=settings.config.risk.max_total_exposure_pct,
-        max_position_exposure_percent=settings.config.risk.max_position_exposure_pct,
+        max_drawdown_percent=settings.risk.drawdown_limit_pct,
+        max_total_exposure_percent=settings.risk.max_total_exposure_pct,
+        max_position_exposure_percent=settings.risk.max_position_exposure_pct,
         min_leverage=1.0,
-        max_leverage=50.0,
-        default_risk_percent=settings.config.account.risk_per_trade * 100,
+        max_leverage=_pol.max_leverage,  # 10x research, not 50x
+        policy=_pol,
+        default_risk_percent=settings.risk.risk_per_trade * 100,
         default_leverage=1.0,
     )
     
@@ -249,19 +259,19 @@ async def initialize_execution_engine(
         "DRY_RUN": ExecutionMode.DRY_RUN,
         "LIVE": ExecutionMode.LIVE,
     }
-    mode = mode_map.get(settings.config.mode, ExecutionMode.PAPER)
+    mode = mode_map.get(settings.exchange.mode, ExecutionMode.PAPER)
     
     exec_config = ExecutionConfig(
         mode=mode,
         binance=BinanceConfig(
-            api_key=settings.config.binance.api_key,
-            api_secret=settings.config.binance.api_secret,
-            testnet=settings.config.binance.testnet,
+            api_key=settings.binance.api_key,
+            api_secret=settings.binance.api_secret,
+            testnet=settings.binance.testnet,
         ) if binance_rest else None,
-        max_open_orders=settings.config.risk.max_open_positions or 100,
+        max_open_orders=settings.risk.max_open_positions or 100,
         reconciliation_interval_seconds=30.0,
         kill_switch_enabled=True,
-        max_drawdown_pct=settings.config.risk.drawdown_limit_pct,
+        max_drawdown_pct=settings.risk.drawdown_limit_pct,
         max_daily_loss_pct=5.0,
         paper_fallback=True,
     )
@@ -408,9 +418,9 @@ async def startup() -> AppState:
     log_info(logger, "=" * 60)
     log_info(logger, "QuantAI v5.0.0 Starting Up")
     log_info(logger, "=" * 60)
-    log_info(logger, f"Mode: {settings.config.mode}")
-    log_info(logger, f"Symbol: {settings.config.binance.symbol}")
-    log_info(logger, f"Timeframe: {settings.config.binance.timeframe}")
+    log_info(logger, f"Mode: {settings.exchange.mode}")
+    log_info(logger, f"Symbol: {settings.exchange.symbol}")
+    log_info(logger, f"Timeframe: {settings.exchange.timeframe}")
     
     # 2. Config validation
     await validate_configuration(logger)
@@ -480,6 +490,7 @@ async def shutdown(state: Optional[AppState] = None) -> None:
     4. Close Binance connections
     5. Flush metrics/logs
     """
+    global _state
     if state is None:
         state = _state
     
@@ -536,7 +547,8 @@ async def shutdown(state: Optional[AppState] = None) -> None:
     # 9. Health checker
     if state.health_checker:
         log_info(logger, "Stopping health checker...")
-        await state.health_checker.stop()
+        # HealthChecker has no explicit stop method
+        pass
     
     elapsed = time.time() - state.start_time
     log_info(logger, "=" * 60)

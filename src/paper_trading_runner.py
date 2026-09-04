@@ -25,6 +25,13 @@ from typing import Optional, List, Dict, Any
 
 import pandas as pd
 
+# Canonical risk policy (Audit: single source of truth)
+try:
+    from src.risk.policy import get_policy as _get_canonical_policy  # canonical src/risk/policy.py
+    _CANONICAL_PAPER = _get_canonical_policy("paper")
+except Exception:
+    _CANONICAL_PAPER = None  # type: ignore
+
 from src.ml_engine import MLEngine, MLConfig
 from src.model_manager import ModelManager
 from src.paper_trading_engine import (
@@ -107,6 +114,8 @@ class PaperTradingStepResult:
 
 
 class PaperTradingRunner:
+    # Canonical PaperPolicy: 30% total / 3% per position / 10% DD / 10x leverage
+    # Previously diverged 60%/5%/50x — now unified to src/risk/policies.py (Audit single canonical)
     def __init__(
         self,
         initial_balance: float = 1000.0,
@@ -114,12 +123,12 @@ class PaperTradingRunner:
         quantity: float = 1.0,
         enable_risk_controls: bool = True,
         risk_percent: float = 1.0,
-        max_drawdown_percent: float = 10.0,
-        max_total_exposure_percent: float = 60.0,
-        max_position_exposure_percent: float = 5.0,
+        max_drawdown_percent: float = 10.0,  # canonical PaperPolicy 10.0
+        max_total_exposure_percent: float = 30.0,  # was 60.0 → now 30.0 PaperPolicy
+        max_position_exposure_percent: float = 3.0,  # was 5.0 → now 3.0 PaperPolicy
         leverage: float = 1.0,
         min_leverage: float = 1.0,
-        max_leverage: float = 50.0,
+        max_leverage: float = 10.0,  # was 50.0 → now 10.0 canonical
         risk_orchestrator: RiskOrchestrator | None = None,
         # ML Integration
         enable_ml: bool = False,
@@ -820,7 +829,6 @@ class PaperTradingRunner:
         Generate Strategy signals from a DataFrame
         and process them sequentially.
         """
-
         if not isinstance(
             df,
             pd.DataFrame,
@@ -834,14 +842,22 @@ class PaperTradingRunner:
                 "DataFrame cannot be empty."
             )
 
+        # Need at least warmup_bars for indicators to be valid
+        warmup_bars = 250  # EMA 200 needs 200, plus buffer
+        if len(df) < warmup_bars + 1:
+            raise ValueError(
+                f"DataFrame must have at least {warmup_bars + 1} rows for indicators to be valid"
+            )
+
         results: list[
             PaperTradingStepResult
         ] = []
 
         ml_model = self._ml_engine.model if self.enable_ml and self._ml_engine else None
 
+        # Start from warmup_bars to ensure indicators are valid
         for end in range(
-            1,
+            warmup_bars,
             len(df) + 1,
         ):
             window = df.iloc[
@@ -951,6 +967,84 @@ class PaperTradingRunner:
 
 
 # =========================================================
+# PAPER TRADING RUNNER FUNCTION
+# =========================================================
+
+async def run_paper_trading(
+    state: Any,
+    duration_minutes: Optional[int] = None,
+    df: Optional[Any] = None,
+) -> Any:
+    """
+    Run paper trading simulation with the given state.
+    
+    Args:
+        state: Application state from lifecycle startup
+        duration_minutes: Optional duration in minutes to run
+        df: Optional pre-loaded DataFrame with prepared data
+    
+    Returns:
+        PaperTradingRunner instance with completed simulation
+    """
+    from src.paper_trading_runner import PaperTradingRunner
+    from src.strategy.signal_generator import SignalGenerator, SignalConfig
+    import pandas as pd
+    
+    # Load data if not provided
+    if df is None:
+        df = pd.read_parquet('data/btcusdt_4h_prepared.parquet')
+    
+    # Create paper trading runner with canonical PaperPolicy (30%/3%/10%)
+    # Use get_policy('paper') if available, else explicit canonical values
+    try:
+        _paper = _get_canonical_policy("paper")  # type: ignore
+        runner = PaperTradingRunner(
+            initial_balance=1000.0,
+            commission=_paper.commission,
+            enable_risk_controls=True,
+            risk_percent=_paper.risk_per_trade * 100,
+            max_drawdown_percent=_paper.max_drawdown_pct,
+            max_total_exposure_percent=_paper.max_total_exposure_pct,
+            max_position_exposure_percent=_paper.max_position_exposure_pct,
+            leverage=1.0,
+            max_leverage=_paper.max_leverage,
+        )
+    except Exception:
+        runner = PaperTradingRunner(
+            initial_balance=1000.0,
+            commission=0.0004,
+            enable_risk_controls=True,
+            risk_percent=1.0,
+            max_drawdown_percent=10.0,
+            max_total_exposure_percent=30.0,
+            max_position_exposure_percent=3.0,
+            leverage=1.0,
+            max_leverage=10.0,
+        )
+    
+    # Process the data
+    results = runner.process_dataframe(df)
+    
+    # Print summary
+    trades = [r for r in results if r.trade is not None]
+    print("Paper Trading Complete:")
+    print(f"  Trades: {len(trades)}")
+    if trades:
+        # Get final balance from the engine
+        final_balance = 1000.0  # default
+        if hasattr(runner, 'engine') and runner.engine:
+            final_balance = runner.engine.balance
+        else:
+            # Calculate from trades
+            final_balance = 1000.0 + sum(t.net_profit for t in trades)
+        print(f"  Final Balance: {final_balance:.2f}")
+    else:
+        print("  Final Balance: 1000.00 (no trades)")
+
+    return results
+
+
+# =========================================================
 # EXPORTS
 # =========================================================
 
@@ -958,4 +1052,5 @@ __all__ = [
     "DecisionRecord",
     "PaperTradingStepResult",
     "PaperTradingRunner",
+    "run_paper_trading",
 ]

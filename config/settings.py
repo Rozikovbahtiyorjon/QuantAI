@@ -20,6 +20,7 @@ class ExchangeSettings(BaseSettings):
     api_secret: str = Field(default="", alias="BINANCE_TESTNET_API_SECRET")
     testnet: bool = Field(default=False, alias="BINANCE_TESTNET")
     recv_window: int = 5000
+    mode: str = "PAPER"
 
     @field_validator("timeframe")
     @classmethod
@@ -31,12 +32,11 @@ class ExchangeSettings(BaseSettings):
 
 
 class AccountSettings(BaseSettings):
+    """Account balance — risk fields moved to RiskSettings (canonical). Frozen per P0.1."""
+
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", env_nested_delimiter="__", extra="ignore", frozen=True)
+
     initial_balance: float = 1000.0
-    risk_per_trade: float = 0.01
-    max_open_positions: int = 1
-    max_risk_percent: float = 1.0
-    min_position_size: float = 0.001
-    max_position_size: float = 1.0
 
 
 class CommissionSettings(BaseSettings):
@@ -87,7 +87,7 @@ class IndicatorSettings(BaseSettings):
 
 class StrategySettings(BaseSettings):
     # Fusion rules
-    min_confidence: float = 60.0
+    min_confidence: float = 0.60  # 0..1
     ai_weight: float = 0.60
     ml_weight: float = 0.40
     conflict_penalty: float = 0.70
@@ -103,11 +103,17 @@ class StrategySettings(BaseSettings):
     orderflow_liq_proximity: float = 0.5
     orderflow_pressure_threshold: float = 0.3
     
-    # Confidence Engine weights
+    # Confidence Engine weights (stable WF)
     confidence_trend_weight: float = 1.50
     confidence_momentum_weight: float = 1.20
     confidence_volume_weight: float = 1.10
     confidence_volatility_weight: float = 1.00
+    
+    # WeightedGate (WF stable PF 1.075, tuned 1.105 overfits OOS)
+    weighted_gate_threshold: float = 0.75
+    weighted_gate_min_confidence: float = 60.0  # 0..100 percentage
+    weighted_gate_long_threshold: float = 0.55
+    weighted_gate_short_threshold: float = 0.55
     
     # SL/TP
     sl_tp_method: Literal["atr_fixed", "atr_adaptive"] = "atr_adaptive"
@@ -148,6 +154,84 @@ class TelegramSettings(BaseSettings):
     enabled: bool = False
     token: str = ""
     chat_id: str = ""
+    # Office mode — group control
+    office_enabled: bool = False
+    admin_ids: str = ""  # comma-separated user IDs, e.g. "123,456"
+    topic_mode: bool = False  # Forum topics per agent
+    polling_timeout: int = 20
+    # Per-agent tokens JSON: {"risk":"TOKEN1","architect":"TOKEN2"} — for multi-bot mode
+    agent_tokens_json: str = ""
+    # Natural language — LLM routing (free: ollama local, or openai/groq cloud)
+    model_config = SettingsConfigDict(extra="ignore", env_file=".env", env_file_encoding="utf-8", extra_ignores=True)  # type: ignore
+    llm_enabled: bool = False
+    llm_provider: str = "openai"  # openai | ollama | groq — env: TELEGRAM__LLM_PROVIDER
+    llm_model: str = "gpt-4o-mini"  # env: TELEGRAM__LLM_MODEL
+    llm_base_url: str = ""  # env: TELEGRAM__LLM_BASE_URL — for ollama: http://localhost:11434/v1
+    llm_api_key: str = Field(default="", alias="OPENAI_API_KEY")
+    # explicit TELEGRAM__LLM_API_KEY alternative
+    llm_api_key_alt: str = Field(default="", alias="TELEGRAM__LLM_API_KEY")
+    groq_api_key: str = Field(default="", alias="GROQ_API_KEY")
+
+    def get_llm_key(self) -> str:
+        # priority: TELEGRAM__LLM_API_KEY -> OPENAI_API_KEY -> env
+        if self.llm_api_key_alt.strip():
+            return self.llm_api_key_alt.strip()
+        if self.llm_api_key.strip():
+            return self.llm_api_key.strip()
+        # fallback: read .env directly (pydantic may not have loaded OPENAI_API_KEY due to nesting)
+        import os
+
+        for k in ("OPENAI_API_KEY", "TELEGRAM__LLM_API_KEY"):
+            v = os.getenv(k, "").strip()
+            if v:
+                return v
+        # last resort: parse .env file manually (no import needed)
+        try:
+            from pathlib import Path
+
+            env_path = Path(".env")
+            if env_path.exists():
+                for line in env_path.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if line.startswith("OPENAI_API_KEY="):
+                        v = line.split("=", 1)[1].strip().strip('"').strip("'")
+                        if v and not v.startswith("sk-proj-..."):
+                            return v
+                    if line.startswith("TELEGRAM__LLM_API_KEY="):
+                        v = line.split("=", 1)[1].strip().strip('"').strip("'")
+                        if v:
+                            return v
+        except Exception:
+            pass
+        return ""
+
+    @property
+    def admin_id_list(self) -> list[int]:
+        if not self.admin_ids.strip():
+            return []
+        ids: list[int] = []
+        for part in self.admin_ids.split(","):
+            part = part.strip()
+            if part:
+                try:
+                    ids.append(int(part))
+                except ValueError:
+                    continue
+        return ids
+
+    @property
+    def agent_tokens(self) -> dict[str, str]:
+        if not self.agent_tokens_json.strip():
+            return {}
+        import json
+
+        try:
+            data = json.loads(self.agent_tokens_json)
+            if isinstance(data, dict):
+                return {str(k): str(v) for k, v in data.items() if v}
+        except Exception:
+            pass
+        return {}
 
 
 class LoggingSettings(BaseSettings):
@@ -157,37 +241,93 @@ class LoggingSettings(BaseSettings):
 
 
 class RiskSettings(BaseSettings):
-    # Drawdown limits
+    """
+    DEPRECATED/FROZEN — use src.risk.policy.get_policy() as single source.
+    Mirrors src.risk.policy.BasePolicy (ResearchPolicy). Frozen: direct mutation blocked.
+    To stay fail-closed, defaults must NOT exceed canonical ResearchPolicy;
+    any environment override that loosens limits raises via validators below.
+    """
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", env_nested_delimiter="__", extra="ignore", frozen=True)
+
+    # Drawdown limits (canonical ResearchPolicy max_drawdown_pct 10.0)
     drawdown_limit_pct: float = 10.0
     max_daily_loss_pct: float = 5.0
     max_drawdown_pct: float = 10.0
-    
-    # Exposure limits
-    max_total_exposure_pct: float = 60.0
-    max_position_exposure_pct: float = 5.0
+
+    # Exposure limits — P0.6 Single source: derived from canonical ResearchPolicy (no drift)
+    # Do not hardcode 60/5 here — import from src.risk.policy to stay in sync
+    # Fallback to literal only if import fails (should not happen)
+    try:
+        from src.risk.policy import ResearchPolicy as _RP
+        _def_total = float(_RP.max_total_exposure_pct)
+        _def_pos = float(_RP.max_position_exposure_pct)
+        _def_leverage = float(_RP.max_leverage)
+        _def_drawdown = float(_RP.max_drawdown_pct)
+    except Exception:
+        _def_total = 60.0
+        _def_pos = 5.0
+        _def_leverage = 10.0
+        _def_drawdown = 10.0
+    max_total_exposure_pct: float = _def_total  # Research 60%
+    max_position_exposure_pct: float = _def_pos  # Research 5%
     max_open_positions: int = 1
-    
-    # Position sizing
+    reserve_percent: float = 40.0  # 40% absolute reserve (3-5-7 rule)
+
+    # Position sizing (canonical risk_per_trade 0.01)
     position_sizer_method: Literal["fixed_fractional", "kelly", "volatility_adjusted"] = "fixed_fractional"
     risk_per_trade: float = 0.01  # 1% per trade
     max_risk_percent: float = 1.0
     min_position_size: float = 0.001
     max_position_size: float = 1.0
     risk_reward_ratio: float = 2.0
-    min_risk_reward_ratio: float = 1.5
-    
-    # Leverage limits
-    max_leverage: float = 10.0
+    min_risk_reward_ratio: float = 7.0  # 3-5-7 rule: profit ≥ 7% more than loss
+
+    # Leverage limits — P0.6 No Policy -> No Leverage, default None would be stricter, but keepResearch 10x here for research;
+    # Production/Testnet must use TestnetPolicy/ProductionPolicy 3x via get_policy()
+    max_leverage: float = _def_leverage  # Research 10x
     min_leverage: float = 1.0
-    
-    # Correlation limits
+
+    # Correlation limits (canonical max_correlation 0.85)
     max_correlation: float = 0.85
     max_correlated_assets: int = 2
+
+    # Reserve and margin (P0.1 canonical)
+    reserve_percent: float = 40.0
+    max_margin_pct: float = 30.0
+    max_factor_exposure_pct: float = 15.0
+    max_factor_concentration: float = 0.70
+    correlation_adjusted_limit: float = 0.15
     
     # Stop loss / Take profit multipliers (ATR-based)
     atr_stop_multiplier: float = 1.5
     atr_take_multiplier: float = 3.0
     trailing_stop_multiplier: float = 2.0
+
+    @field_validator("risk_per_trade", "max_total_exposure_pct", "max_position_exposure_pct", "max_drawdown_pct", "max_correlation", "max_leverage", "reserve_percent", "max_margin_pct", "max_factor_exposure_pct", "max_factor_concentration", "correlation_adjusted_limit")
+    @classmethod
+    def validate_not_looser_than_canonical(cls, v: float, info) -> float:  # type: ignore
+        # Compare against canonical ResearchPolicy ceilings; fail if looser
+        try:
+            from src.risk.policy import ResearchPolicy  # lazy to avoid circular
+            ceilings = {
+                "risk_per_trade": ResearchPolicy.risk_per_trade,
+                "max_total_exposure_pct": ResearchPolicy.max_total_exposure_pct,
+                "max_position_exposure_pct": ResearchPolicy.max_position_exposure_pct,
+                "max_drawdown_pct": ResearchPolicy.max_drawdown_pct,
+                "max_correlation": ResearchPolicy.max_correlation,
+                "max_leverage": ResearchPolicy.max_leverage,
+                "reserve_percent": ResearchPolicy.reserve_percent,
+                "max_margin_pct": ResearchPolicy.max_margin_pct,
+                "max_factor_exposure_pct": ResearchPolicy.max_factor_exposure_pct,
+                "max_factor_concentration": ResearchPolicy.max_factor_concentration,
+                "correlation_adjusted_limit": ResearchPolicy.correlation_adjusted_limit,
+            }
+            field = info.field_name
+            if field in ceilings and float(v) > float(ceilings[field]) + 1e-9:
+                raise ValueError(f"RiskSettings.{field} {v} exceeds canonical ResearchPolicy {ceilings[field]} — only tighten via tighten(), not via settings override")
+        except ImportError:
+            pass
+        return v
 
 
 class Settings(BaseSettings):
@@ -212,6 +352,9 @@ class Settings(BaseSettings):
     risk: RiskSettings = RiskSettings()
     strategy: StrategySettings = StrategySettings()
 
+    def model_post_init(self, __context) -> None:
+        pass
+
     # Convenience properties for backward compatibility
     @property
     def SYMBOL(self) -> str:
@@ -231,11 +374,15 @@ class Settings(BaseSettings):
 
     @property
     def RISK_PER_TRADE(self) -> float:
-        return self.account.risk_per_trade
+        return self.risk.risk_per_trade
 
     @property
     def MAX_OPEN_POSITIONS(self) -> int:
-        return self.account.max_open_positions
+        return self.risk.max_open_positions
+
+    @property
+    def MAX_RISK_PERCENT(self) -> float:
+        return self.risk.max_risk_percent
 
     @property
     def COMMISSION(self) -> float:
@@ -410,6 +557,14 @@ class Settings(BaseSettings):
         return self.telegram.chat_id
 
     @property
+    def TELEGRAM_OFFICE_ENABLED(self) -> bool:
+        return self.telegram.office_enabled
+
+    @property
+    def TELEGRAM_ADMIN_IDS(self) -> list[int]:
+        return self.telegram.admin_id_list
+
+    @property
     def LOG_LEVEL(self) -> str:
         return self.logging.log_level
 
@@ -437,8 +592,8 @@ LIMIT = settings.exchange.limit
 CANDLE_LIMIT = LIMIT
 
 INITIAL_BALANCE = settings.account.initial_balance
-RISK_PER_TRADE = settings.account.risk_per_trade
-MAX_OPEN_POSITIONS = settings.account.max_open_positions
+RISK_PER_TRADE = settings.risk.risk_per_trade
+MAX_OPEN_POSITIONS = settings.risk.max_open_positions
 
 COMMISSION = settings.commission.commission
 SLIPPAGE = settings.commission.slippage
@@ -480,9 +635,9 @@ ENABLE_BREAK_EVEN = settings.backtest.enable_break_even
 ENABLE_PARTIAL_CLOSE = settings.backtest.enable_partial_close
 
 RISK_REWARD_RATIO = settings.backtest.risk_reward_ratio
-MAX_RISK_PERCENT = settings.account.max_risk_percent
-MIN_POSITION_SIZE = settings.account.min_position_size
-MAX_POSITION_SIZE = settings.account.max_position_size
+MAX_RISK_PERCENT = settings.risk.max_risk_percent
+MIN_POSITION_SIZE = settings.risk.min_position_size
+MAX_POSITION_SIZE = settings.risk.max_position_size
 
 ML_ENABLED = settings.ml.ml_enabled
 MODEL_PATH = settings.ml.model_path
@@ -503,7 +658,7 @@ LOG_LEVEL = settings.logging.log_level
 SAVE_TRADES = settings.logging.save_trades
 TRADES_FILE = settings.logging.trades_file
 
-RISK_PERCENT = settings.account.max_risk_percent
+RISK_PERCENT = settings.risk.max_risk_percent
 
 
 __all__ = [
@@ -529,6 +684,9 @@ __all__ = [
     "INITIAL_BALANCE",
     "RISK_PER_TRADE",
     "MAX_OPEN_POSITIONS",
+    "MAX_RISK_PERCENT",
+    "MIN_POSITION_SIZE",
+    "MAX_POSITION_SIZE",
     "COMMISSION",
     "SLIPPAGE",
     "EMA_FAST",
@@ -541,9 +699,6 @@ __all__ = [
     "ENABLE_BREAK_EVEN",
     "ENABLE_PARTIAL_CLOSE",
     "RISK_REWARD_RATIO",
-    "MAX_RISK_PERCENT",
-    "MIN_POSITION_SIZE",
-    "MAX_POSITION_SIZE",
     "ML_ENABLED",
     "MODEL_PATH",
     "TELEGRAM_ENABLED",

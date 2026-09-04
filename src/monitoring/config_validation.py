@@ -65,7 +65,9 @@ class ConfigValidator:
     def validate_all(self) -> "ValidationResult":
         """Run all validation checks."""
         self._validate_required_env()
-        self._validate_binance_config()
+        # Skip Binance validation in PAPER mode
+        if self.settings.exchange.mode != "PAPER":
+            self._validate_binance_config()
         self._validate_paths()
         self._validate_risk_params()
         self._validate_ml_config()
@@ -76,6 +78,10 @@ class ConfigValidator:
     
     def _validate_required_env(self):
         """Check required environment variables."""
+        # Skip Binance API keys in PAPER mode
+        if self.settings.exchange.mode == "PAPER":
+            return
+            
         required = [
             "BINANCE_TESTNET_API_KEY",
             "BINANCE_TESTNET_API_SECRET",
@@ -150,8 +156,8 @@ class ConfigValidator:
             self.result.add_error(f"max_correlated_assets must be >= 1, got {r.max_correlated_assets}")
         
         # Position sizing
-        if self.settings.account.risk_per_trade <= 0 or self.settings.account.risk_per_trade > 1:
-            self.result.add_error(f"risk_per_trade must be 0-1, got {self.settings.account.risk_per_trade}")
+        if self.settings.risk.risk_per_trade <= 0 or self.settings.risk.risk_per_trade > 1:
+            self.result.add_error(f"risk_per_trade must be 0-1, got {self.settings.risk.risk_per_trade}")
         
         # Exposure limits
         if r.max_total_exposure_pct <= 0 or r.max_total_exposure_pct > 100:

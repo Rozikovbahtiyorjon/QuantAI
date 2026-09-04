@@ -1,6 +1,11 @@
 # QuantAI Backlog (отложенные задачи)
 
 Сформирован по итогам аудита 2026-08-27. Порядок — приоритет.
+**Корректная последовательность**: `PHASE 0 Engineering+Risk → 1 Trusted Evidence+Control Plane → 2 OOS/Nested WF/Research Integrity → 3 Robustness+Statistical → 4 Alpha Research (P3) → 5 Paper (30–90д) → 6 Testnet → 7 Small Live → 8 Autonomous Evolution (P4+P5.8)`
+
+> **FREEZE до `phase-1-control-plane-complete`**: `LLM trading signals`, `Deep RL`, `Transformer`, `GAN/VAE`, `десятки индикаторов`, `массовая Optuna 1000+`, `LunarCrush`, `сложная genetic evolution` — любые PR из этого списка → `BLOCKED` гейт (см. `docs/roadmap/phase-gates.md`).
+
+> **P3 Advanced Alpha только после P0/P1/P2**, **P4 Autonomous только после Research Integrity (Phase 2)**, **P5 Production только после Phase 3**.
 
 ## P0 — до первого запуска с реальными ключами
 - [ ] **Маскирование секретов**: `run.py config show`, логи — печатать только `...last4` ключей (`api_key/api_secret/token/password`)
@@ -46,7 +51,37 @@
 ## P1-portfolio — Диверсификация 60/40 для кросс-секционного брокера
 - [ ] **60% депозита / 40% резерв + 3–5% на актив**: `CrossSectionParams(reserve_ratio=0.40, max_position_pct=0.05)` → `per_name = equity*(1-reserve)/top_k` capped; `top_k=2` (30% — пометка «концентрированный») vs `top_k=12` (5% честный); weekly-оборот уже есть (142 ребаланса)
 
-## P5-AutoML — Самообучение / «Конструктор стратегий»
+## P3 — Advanced Alpha Research — ТОЛЬКО после P0/P1/P2 (`phase-3-robustness-complete`)
+
+- [ ] **P3.1 Breakout + regime filter** (`src/research/breakout_research_branch.py:RegimeFilteredBreakout`, `RegimeFilter adx 22/18 hysteresis`)
+- [ ] **P3.2 Breakout + ML meta-labeling** (`Primary → Candidate → ML Meta → TAKE/REJECT`, `FilteredGenerator` + `ExpectedReturnModel E[net]`, `src/strategy/meta_label.py`)
+- [ ] **P3.3 Multi-timeframe** `4h regime (HTF EMA 50) → 1h structure → 15m entry` (`MultiTFConfirm tf_bars=4`, `src/strategy/meta_label.py`)
+- [ ] **P3.4 Cross-sectional momentum** `BTC/ETH/SOL` sort `return 20d` long top/short bottom (`src/strategies/cross_sectional.py`, `src/portfolio/multi_symbol.py`)
+- [ ] **P3.5 Volatility breakout** `ATR 14*1.5 + range breakout` (`src/strategy/breakout_signal.py`)
+- [ ] **P3.6 Alternative data** `funding/OI/liquidation/L2/VPIN/Kyle Lambda` (`src/microstructure_intelligence.py`, `src/alternative_data.py` — stub до L2-cache, активируется после `phase-3`)
+- [ ] **P3.7 HMM/regime clustering** `HMM 3-state` + `KMeans 7` → `REGIMES` (`src/ml_regime.py`, `src/research/regime_stability.py`)
+
+## P4 — Autonomous Intelligence — ТОЛЬКО после Research Integrity (Phase 2)
+
+- [ ] **P4.1 Autonomous Hypothesis Generator** `Supervisor → hypothesis` (`src/control_plane/supervisor.py:_research_loop_on_reject`)
+- [ ] **P4.2 Autonomous Experiment Generator** `hypothesis → experiment spec` (`ExperimentRegistry` + `TaskManager`)
+- [ ] **P4.3 Autonomous Coding** `task → code → tests → repair` (`RetryEngine` + `ruff`/`py_compile`)
+- [ ] **P4.4 Autonomous Research Loop** `experiment → evaluate → reject/improve → new experiment` (`_execute_cycle` OBSERVE→GATE)
+- [ ] **P4.5 Research Budget Enforcement** `experiments/Optuna trials/mutations/OOS touches/retries` durable `AtomicResearchLedger` (`src/research/research_budget.py`)
+- [ ] **P4.6 Autonomous Champion Search** только `verified evidence + robust OOS + statistical PASS` (`src/champion/pipeline.py` + `ResearchIntegrity`)
+
+## P5 — Production — И только здесь
+
+- [ ] **P5.1 30–90 дней Paper Trading** (`src/validation/long_run.py`, `min_trades 30/90d`, gate `BLOCKED` до 30д)
+- [ ] **P5.2 Testnet full lifecycle** (`ExecutionEngine(DRY_RUN)` + `verify_no_withdraw_permission`)
+- [ ] **P5.3 Failure injection (8)** `exchange unavailable / websocket disconnect / REST timeout / Redis failure / database failure / stale market data / corrupted model / unexpected position` (`tests/test_quantai_production_runtime_*`)
+- [ ] **P5.4 Disaster recovery drill** (`emergency_stop` → `resume_from_halt` 7 шагов)
+- [ ] **P5.5 Reconciliation drill** (`ReconciliationEngine` ghost/stuck)
+- [ ] **P5.6 Emergency-stop drill** (`HALTED → flatten → verify flat`)
+- [ ] **P5.7 Small-capital live** `$100–500` 14д, `max_exposure 5%`, `reserve 40%`
+- [ ] **P5.8 Gradual capital scaling** `+20%` каждые 30д при `PF>1.2`, `DD<10%` (после P4.6)
+
+## P5-AutoML — Самообучение / «Конструктор стратегий» — ТОЛЬКО после Phase 8
 
 - [ ] **StrategyComposer** (`src/auto_ml/strategy_composer.py`):
     - `propose(market: MarketContext, constraints: Constraints) -> List[CandidateSpec]`
@@ -65,6 +100,21 @@
 
 ## P2-aggressive — MAX-PROFIT пресет (изолированная ветка, вне 3-5-7)
 - [ ] **Агрессивный кандидат `xs_aggressive`**: `risk 5–7%` (Kelly×1.0), `total 95%`, `position 30%`, `leverage 15–20×` (изолированная), `top_k=1`, `rebalance 3д`, `DD soft 30% / hard 50%`, `weighting equal` (без vol-target), без Hard Stop — ожидается +800–1200%/3г при DD −90%+ и риске слива ~40%; только как отдельный кандидат банка, никогда дефолтом
+
+## FREEZE — Что НЕ делать сейчас (до `phase-1-control-plane-complete`)
+
+| Заморожено | Почему | Разморозка |
+|------------|--------|------------|
+| LLM trading signals | Нужна калибровка OOS, иначе утечка | `phase-3` |
+| Deep RL | Требует симуляцию + risk safety | `phase-3` |
+| Transformer | Сложность без профита в P0 | `phase-4` |
+| GAN/VAE | Сложность без профита | `phase-4` |
+| Десятки индикаторов | Бритва Оккама: лимит 2–3, WF-абляция | `phase-2` |
+| Массовая Optuna 1000+ | Переоптимизация, бюджет `max_optuna 50` | `phase-4` |
+| LunarCrush Galaxy Score | Внешняя зависимость, лимиты | `phase-4` alt data |
+| Сложная genetic evolution | Требует verified champion search | `phase-8` |
+
+> Любой PR из FREEZE до `phase-1` → `BLOCKED` гейт. Проверка: `grep -r "Transformer\|LunarCrush\|GAN" src --include="*.py" | gate`.
 
 ## Известные ограничения (не баги)
 - OrderFlowGate получает None в оффлайн-режимах (нет L2-истории) — активировать после data-infra

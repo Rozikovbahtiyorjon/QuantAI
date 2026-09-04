@@ -1,1 +1,1 @@
-﻿"""QuantAI strategy family implementations."""
+"""QuantAI strategy family implementations."""

@@ -1,41 +1,110 @@
-# Python
+# Python - bytecode and caches
 __pycache__/
 *.py[cod]
 *.pyo
+*.pyc
+*.pyd
+*.egg-info/
+*.egg
+dist/
+build/
+eggs/
+wheels/
+*.whl
+
+# Caches and coverage
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache
+.tox/
+.nox/
 
 # Virtual Environment
 .venv/
 venv/
+env/
+ENV/
+.venv*/
+venv*/
 
 # Environment / secrets (CRITICAL: never commit credentials)
 .env
 .env.*
 *.env
 !.env.example
+!.env.telegram.example
+!.env.testnet
 
 # Data (reproducible via download pipeline, do not commit)
 data/
 !data/.gitkeep
+!data/archive/.gitkeep
+!data_schema/
+!data_schema/.gitkeep
+!data_schema/FEATURE_SCHEMA.json
+!data_schema/FEATURE_SCHEMA.min.json
 
-# Models (artifacts, retrainable)
+# Models (artifacts, retrainable) - all pkl ignored via models/ but explicit
 models/
+*.pkl
+*.pickle
+*.joblib
+models/*.pkl
+models/*.pickle
 
-# Run outputs
+# Run outputs - trades and tmp
+trades.csv
 trades*.csv
+trades*.json
 output.txt
+tree.txt
+test_output.txt
+tmp_*/
+tmp_*
+tmp_*.parquet
+tmp_*.csv
+tmp_*.json
+*.bak.parquet
+*.bak.*
+*.bak
+tmp_prepared.parquet
+tmp_prepared.csv
 
-# VS Code / IDE
-.vscode/
-.idea/
-
-# Logs
+# Logs - generated logs, runtime logs
 logs/
 *.log
+*.out
+*.err
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # Jupyter
 .ipynb_checkpoints/
+*.ipynb_checkpoints
 
 # OS
 .DS_Store
 Thumbs.db
+*.swp
+*.swo
+*~
+
+# VS Code / IDE
+.vscode/
+.idea/
+*.code-workspace
+*.sublime-project
+*.sublime-workspace
+
+# Monitoring local data (prometheus, grafana)
+monitoring/data/
+monitoring/prometheus_data/
+
+# Experimental artifacts
+experimental/.cache/

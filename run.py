@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import sys
+import asyncio
 from pathlib import Path
 from typing import Optional
 
@@ -502,7 +503,32 @@ def paper_run(
 ):
     """Run paper trading session"""
     console.print(f"[cyan]Starting paper trading with config {config}...[/cyan]")
-    console.print("[yellow]Not yet implemented - use paper_trading_runner.py directly[/yellow]")
+    
+    import asyncio
+    from src.lifecycle import startup, shutdown
+    
+    async def run_paper_trading():
+        state = await startup()
+        # Override mode to PAPER
+        state.settings.config.mode = "PAPER"
+        
+        # Import and start paper trading engine
+        from src.paper_trading_runner import run_paper_trading
+        
+        console.print(f"[green]Paper trading started[/green]")
+        
+        try:
+            # Run paper trading
+            await run_paper_trading(
+                state=state,
+                duration_minutes=duration,
+            )
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Interrupted by user[/yellow]")
+        finally:
+            await shutdown(state)
+    
+    asyncio.run(run_paper_trading())
 
 
 # ============================================================
@@ -571,7 +597,7 @@ def config_validate():
     if settings.account.initial_balance <= 0:
         errors.append("initial_balance must be > 0")
 
-    if not 0 < settings.account.risk_per_trade <= 1:
+    if not 0 < settings.risk.risk_per_trade <= 1:
         errors.append("risk_per_trade must be in (0, 1]")
 
     if settings.exchange.limit < 100:

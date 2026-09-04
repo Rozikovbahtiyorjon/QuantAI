@@ -47,6 +47,14 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
 
+      - name: Validate pyproject.toml (Audit §3 fail-fast)
+        run: python -c "import tomllib; open('pyproject.toml','rb').read() and tomllib.load(open('pyproject.toml','rb')) and print('TOML OK')"
+
+      - name: AST hygiene — every *.py MUST PASS (Audit §5)
+        run: |
+          python -m py_compile $(find src -name "*.py") && echo "AST OK"
+          python scripts/generate_feature_schema.py || true
+
       - name: Run tests
         run: |
           python -m pytest tests/ -q --tb=short \

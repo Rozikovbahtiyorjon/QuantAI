@@ -24,10 +24,12 @@ from src.risk.risk_orchestrator import (
     create_default_orchestrator,
     RiskDecision,
 )
-from src.risk.position_sizer import PositionSizer
-from src.risk.drawdown_guard import DrawdownGuard
-from src.risk.exposure_manager import ExposureManager
-from src.strategy import SignalResult
+from src.position_sizer import PositionSizer
+from src.drawdown_guard import DrawdownGuard
+from src.exposure_manager import ExposureManager
+from typing import TYPE_CHECKING, Any
+if TYPE_CHECKING:
+    from src.strategy import SignalResult
 
 
 # Global default orchestrator for backward compatibility
@@ -207,7 +209,7 @@ def break_even_price(
 # =========================================================
 
 def evaluate_risk(
-    signal: SignalResult,
+    signal: Any,
     equity: float,
     current_exposure: float = 0.0,
     risk_percent: float = 1.0,

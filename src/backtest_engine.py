@@ -1,4 +1,4 @@
-﻿"""
+"""
 =========================================================
 QuantAI Professional v5
 Backtest Engine
@@ -87,6 +87,32 @@ class BacktestResult:
 
     trades: Any = None
     equity_curve: Any = None
+    funnel: Any = None  # P2.10 FunnelCounts for 0-trades diagnostics
+
+    # P1 FIX Audit #15-17: Insufficient sample guard — PF=inf with 2 trades is NOT edge.
+    MIN_TRADES_FOR_VALID_PF: int = 30
+    MIN_OOS_DAYS: int = 90
+
+    @property
+    def is_insufficient_sample(self) -> bool:
+        return self.total_trades < self.MIN_TRADES_FOR_VALID_PF
+
+    @property
+    def pf_or_insufficient(self) -> str | float:
+        if self.is_insufficient_sample:
+            return "INSUFFICIENT_SAMPLE"
+        return self.profit_factor
+
+    def to_validation_dict(self) -> dict:
+        """Return dict for ValidationGate — includes sample guard."""
+        return {
+            "profit_factor": self.profit_factor if not self.is_insufficient_sample else 0.0,
+            "pf_display": self.pf_or_insufficient,
+            "is_insufficient_sample": self.is_insufficient_sample,
+            "total_trades": self.total_trades,
+            "expectancy": self.expectancy,
+            "net_expectancy": self.expectancy,  # net after costs already in trade_engine
+        }
 
 
 # ==========================================================
@@ -112,7 +138,9 @@ class BacktestEngine:
         self,
         initial_balance: float | None = None,
         minimum_rows: int = MINIMUM_ROWS,
+        seed: int = 42,  # Audit: BacktestSeed → Execution RNG → FillModel (reproducibility)
     ) -> None:
+        self.seed = int(seed)
 
         if initial_balance is not None:
 
@@ -173,7 +201,7 @@ class BacktestEngine:
         starts from a clean state.
         """
 
-        engine = TradeEngine()
+        engine = TradeEngine(seed=self.seed)
 
         if self.initial_balance is not None:
 
@@ -686,11 +714,15 @@ class BacktestEngine:
         gross_profit = sum(wins)
         gross_loss = abs(sum(losses))
 
+        # P1 Audit: 2 wins 0 losses → PF=inf must not be treated as edge → INSUFFICIENT_SAMPLE
+        # Keep float for backward compat, but callers must check is_insufficient_sample before using PF
         profit_factor = (
             gross_profit / gross_loss
             if gross_loss > 0
             else (float("inf") if gross_profit > 0 else 0.0)
         )
+        # Mark PF as non-usable when sample <30 — gate will map to INSUFFICIENT_SAMPLE
+        # (do not change float here; property pf_or_insufficient handles display)
 
         expectancy = (
             sum(nets) / len(nets) if nets else 0.0
@@ -898,6 +930,14 @@ class BacktestEngine:
         # Build result
         # --------------------------------------------------
 
+        # P2.10 Funnel: attach real counts from TradeEngine
+        funnel = getattr(self.trade_engine, "funnel", None)
+        if funnel is not None:
+            try:
+                # Ensure trades_closed is synced (TradeEngine already sets it)
+                funnel.trades_closed = total_trades
+            except Exception:
+                pass
         result = BacktestResult(
             initial_balance=initial_balance,
             final_balance=final_balance,
@@ -909,6 +949,7 @@ class BacktestEngine:
             total_return_pct=round(total_return_pct, 4),
             equity_curve=list(self.trade_engine.equity_curve),
             trades=trades,
+            funnel=funnel,
             **risk_metrics,
         )
 

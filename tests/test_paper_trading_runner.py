@@ -42,29 +42,42 @@ def test_process_signal_buy_then_sell_flips_position(runner):
 
 @patch("src.paper_trading_runner.generate_signal_result")
 def test_process_dataframe_executes_pipeline(mock_generate, runner):
-    # Мокаем стратегию, чтобы не зависеть от реальной логики индикаторов
-    mock_generate.side_effect = [
-        SignalResult(signal="BUY", entry=100.0),
-        SignalResult(signal="HOLD", entry=105.0),
-        SignalResult(signal="SELL", entry=110.0)
-    ]
+    # Mock returns HOLD for most steps, BUY at step 250, SELL at step 255
+    call_count = {"count": 0}
     
-    df = pd.DataFrame({"close": [100.0, 105.0, 110.0]})
+    def mock_generate_func(df, model=None):
+        call_count["count"] += 1
+        if call_count["count"] == 1:
+            return SignalResult(signal="BUY", entry=float(df.iloc[-1]["close"]))
+        elif call_count["count"] == 6:
+            return SignalResult(signal="SELL", entry=float(df.iloc[-1]["close"]))
+        return SignalResult(signal="HOLD", entry=float(df.iloc[-1]["close"]))
+    
+    mock_generate.side_effect = mock_generate_func
+    
+    # Need at least 251 rows for warmup (250) + 1
+    closes = [100.0 + i * 0.1 for i in range(260)]
+    df = pd.DataFrame({"close": closes})
     results = runner.process_dataframe(df)
     
-    assert len(results) == 3
+    # With warmup_bars=250 and 260 rows, we get 11 results (indices 250-260)
+    assert len(results) == 11
     
-    # Шаг 1: BUY
+    # Step 250 (index 0 in results): BUY
     assert results[0].position_opened is True
     assert results[0].position_closed is False
+    assert results[0].signal.signal == "BUY"
     
-    # Шаг 2: HOLD
-    assert results[1].position_opened is False
-    assert results[1].position_closed is False
+    # Steps 1-4 (indices 1-4): HOLD
+    for i in range(1, 5):
+        assert results[i].signal.signal == "HOLD"
+        assert results[i].position_opened is False
+        assert results[i].position_closed is False
     
-    # Шаг 3: SELL (Flip)
-    assert results[2].position_opened is True
-    assert results[2].position_closed is True
+    # Step 5 (index 5, corresponds to df index 255): SELL
+    assert results[5].position_opened is True
+    assert results[5].position_closed is True
+    assert results[5].signal.signal == "SELL"
     
-    # Итоговая позиция должна быть SHORT
+    # Final position should be SHORT
     assert runner.engine.position.side == "SHORT"

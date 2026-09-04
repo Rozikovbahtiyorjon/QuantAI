@@ -488,5 +488,142 @@ class WeightedGate:
 
 
 # ====================================================
+# ENTRY QUALITY SCORE — distinct from Confidence
+# ====================================================
+
+@dataclass
+class EntryQualityScore:
+    """Quality of the specific entry point, not general confidence.
+    
+    Confidence = strength of directional signal (trend/momentum)
+    Quality = quality of the entry location (pullback zone, exhaustion, trigger)
+    
+    Example: strong trend (confidence 80%) but poor entry (chasing top, quality 30%)
+    vs weak trend (confidence 55%) but perfect pullback entry (quality 85%)
+    """
+    
+    quality: float  # 0-100
+    zone_score: float = 0.0  # distance to zone, 0-100
+    exhaustion_score: float = 0.0  # RSI/volume/wick exhaustion
+    trigger_score: float = 0.0  # trigger quality (engulfing, reclaim)
+    reasons: List[str] = field(default_factory=list)
+
+
+class EntryQualityEngine:
+    """
+    Calculates Entry Quality Score — distinct from Confidence.
+    
+    Quality = f(zone, exhaustion, trigger) — how good is this specific entry point
+    Confidence = f(trend, momentum, volume, volatility) — how strong is the direction
+    """
+    
+    def calculate(
+        self,
+        setup_result: Any = None,  # SetupResult from SetupDetector
+        pullback_result: Any = None,  # TrendPullbackResult
+        mean_reversion_result: Any = None,  # MeanReversionResult
+        zone_result: Any = None,  # POIResult
+        row: Any = None,
+    ) -> EntryQualityScore:
+        """
+        Calculate quality of the specific entry point.
+        
+        Args:
+            setup_result: SetupResult with setup, confidence, zone
+            pullback_result: TrendPullbackResult with quality, zone, invalidated
+            mean_reversion_result: MeanReversionResult with stages
+            zone_result: POIResult with nearest zones
+            row: current bar row for fallback
+        """
+        reasons: List[str] = []
+        zone_score = 50.0
+        exhaustion_score = 50.0
+        trigger_score = 50.0
+        
+        # Zone quality: distance to ideal zone (0 ATR = perfect)
+        if pullback_result and hasattr(pullback_result, 'zone') and pullback_result.zone:
+            try:
+                dist = abs(pullback_result.pullback_dist_atr)
+                # Ideal 0.5-1.5 ATR pullback
+                if 0.8 <= dist <= 1.2:
+                    zone_score = 90.0
+                    reasons.append(f"zone ideal {dist:.2f} ATR")
+                elif 0.5 <= dist <= 2.0:
+                    zone_score = 70.0
+                    reasons.append(f"zone good {dist:.2f} ATR")
+                else:
+                    zone_score = 40.0
+                    reasons.append(f"zone poor {dist:.2f} ATR")
+            except Exception:
+                zone_score = 50.0
+        elif setup_result and hasattr(setup_result, 'bb_position'):
+            try:
+                bb_pos = float(getattr(setup_result, 'bb_position', 0.5))
+                # For pullback, ideal BB 0.3-0.5, for mean reversion BB 0.0-0.2 or 0.8-1.0
+                if setup_result.setup in ("LONG_PULLBACK", "SHORT_PULLBACK"):
+                    if 0.3 <= bb_pos <= 0.6:
+                        zone_score = 80.0
+                    else:
+                        zone_score = 50.0
+                elif "MEAN_REVERSION" in str(setup_result.setup):
+                    if bb_pos <= 0.2 or bb_pos >= 0.8:
+                        zone_score = 85.0
+                reasons.append(f"setup {setup_result.setup} BB {bb_pos:.2f}")
+            except Exception:
+                pass
+        
+        # Exhaustion quality: RSI, volume, wick
+        if setup_result and hasattr(setup_result, 'rsi'):
+            try:
+                rsi = float(getattr(setup_result, 'rsi', 50))
+                if 30 <= rsi <= 70:
+                    if 45 <= rsi <= 55:
+                        exhaustion_score = 85.0
+                        reasons.append(f"exhaustion RSI ideal {rsi:.0f}")
+                    else:
+                        exhaustion_score = 65.0
+                elif rsi < 30 or rsi > 70:
+                    exhaustion_score = 75.0
+                    reasons.append(f"exhaustion RSI extreme {rsi:.0f}")
+            except Exception:
+                pass
+        
+        # Trigger quality: from pullback or mean reversion result
+        if pullback_result and hasattr(pullback_result, 'quality'):
+            try:
+                trigger_score = float(pullback_result.quality) * 100
+                reasons.append(f"trigger pullback quality {pullback_result.quality:.2f}")
+            except Exception:
+                pass
+        elif setup_result and hasattr(setup_result, 'confidence'):
+            try:
+                trigger_score = float(setup_result.confidence) * 100 if setup_result.confidence <= 1 else float(setup_result.confidence)
+                reasons.append(f"trigger setup confidence {trigger_score:.0f}")
+            except Exception:
+                pass
+        
+        # Zone proximity bonus from POI
+        if zone_result and hasattr(zone_result, 'nearest_support'):
+            try:
+                # If near strong support for LONG, quality up
+                if zone_result.nearest_support and zone_result.nearest_support.strength > 0.6:
+                    if zone_result.nearest_support.distance_pct < 0.5:
+                        zone_score = min(100, zone_score + 10)
+                        reasons.append(f"POI support near {zone_result.nearest_support.distance_pct:.2f}% strength {zone_result.nearest_support.strength:.2f}")
+            except Exception:
+                pass
+        
+        quality = (zone_score * 0.4 + exhaustion_score * 0.3 + trigger_score * 0.3)
+        
+        return EntryQualityScore(
+            quality=round(quality, 1),
+            zone_score=round(zone_score, 1),
+            exhaustion_score=round(exhaustion_score, 1),
+            trigger_score=round(trigger_score, 1),
+            reasons=reasons,
+        )
+
+
+# ====================================================
 # MODULE EXPORT
 # ====================================================
